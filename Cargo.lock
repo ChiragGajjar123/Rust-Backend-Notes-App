@@ -824,8 +824,6 @@ dependencies = [
 [[package]]
 name = "may_minihttp"
 version = "0.1.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "710fda59b93aa204a26bfc7ba9c349d90035bd1b30df10df46d7c552d107291e"
 dependencies = [
  "bytes",
  "httparse",
