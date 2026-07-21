@@ -1,0 +1,21 @@
+[package]
+name = "notes_may_minihttp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bcrypt = "0.19.2"
+bytes = "1.12.1"
+chrono = { version = "0.4.45", features = ["serde"] }
+dotenvy = "0.15.7"
+jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
+may = "0.3.51"
+may_minihttp = "0.1.11"
+native-tls = "0.2"
+postgres = { version = "0.19", features = ["with-chrono-0_4", "with-uuid-1"] }
+postgres-native-tls = "0.5"
+r2d2 = "0.8"
+r2d2_postgres = "0.18"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+uuid = { version = "1", features = ["v4", "serde"] }
