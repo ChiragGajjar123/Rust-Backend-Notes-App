@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: rust-notes-backend
+    runtime: rust
+    buildCommand: cargo build --release
+    startCommand: ./target/release/notes_may_minihttp
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: DATABASE_URL
+        sync: false          # set this secret in the Render dashboard
+      - key: JWT_SECRET
+        sync: false          # set this secret in the Render dashboard
+      - key: JWT_EXPIRATION_MS
+        value: "86400000"
+      - key: CORS_ALLOWED_ORIGIN
+        sync: false          # set to your frontend URL in the Render dashboard
+      - key: MAY_WORKERS
+        value: "4"
