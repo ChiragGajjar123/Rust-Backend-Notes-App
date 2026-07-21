@@ -202,48 +202,64 @@ fn status_text(code: usize) -> &'static str {
     }
 }
 
-fn add_common_headers(rsp: &mut Response, state: &AppState) {
-    rsp.header(state.config.cors_origin_header)
+fn get_cors_origin(req: &Request, state: &AppState) -> &'static str {
+    let origin = req.headers()
+        .iter()
+        .find(|h| h.name.eq_ignore_ascii_case("origin"))
+        .and_then(|h| std::str::from_utf8(h.value).ok())
+        .unwrap_or("");
+
+    if origin == "http://localhost:5173" {
+        "Access-Control-Allow-Origin: http://localhost:5173"
+    } else {
+        state.config.cors_origin_header
+    }
+}
+
+fn add_common_headers(rsp: &mut Response, cors_origin: &'static str) {
+    rsp.header(cors_origin)
         .header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS")
         .header("Access-Control-Allow-Headers: Authorization, Content-Type, Accept")
-        .header("Access-Control-Allow-Credentials: true");
+        .header("Access-Control-Allow-Credentials: true")
+        .header("Connection: close");
 }
 
 fn json_response(
     rsp: &mut Response,
-    state: &AppState,
+    cors_origin: &'static str,
     status: usize,
     value: Value,
 ) -> io::Result<()> {
     rsp.status_code(status, status_text(status));
-    add_common_headers(rsp, state);
+    add_common_headers(rsp, cors_origin);
     rsp.header("Content-Type: application/json");
-    let writer = rsp.body_mut().writer();
-    serde_json::to_writer(writer, &value)?;
+    let bytes = serde_json::to_vec(&value)?;
+    rsp.body_vec(bytes);
     Ok(())
 }
 
-fn text_response(rsp: &mut Response, state: &AppState, status: usize, text: &str) {
+fn text_response(rsp: &mut Response, cors_origin: &'static str, status: usize, text: &str) {
     rsp.status_code(status, status_text(status));
-    add_common_headers(rsp, state);
+    add_common_headers(rsp, cors_origin);
     rsp.header("Content-Type: text/plain; charset=utf-8");
     rsp.body_vec(text.as_bytes().to_vec());
 }
 
-fn empty_response(rsp: &mut Response, state: &AppState, status: usize) {
+fn empty_response(rsp: &mut Response, cors_origin: &'static str, status: usize) {
     rsp.status_code(status, status_text(status));
-    add_common_headers(rsp, state);
+    add_common_headers(rsp, cors_origin);
+    rsp.body("");
 }
 
-fn error_response(rsp: &mut Response, state: &AppState, err: ApiError) -> io::Result<()> {
+fn error_response(rsp: &mut Response, cors_origin: &'static str, err: ApiError) -> io::Result<()> {
     if err.message.is_empty() {
-        empty_response(rsp, state, err.status);
+        empty_response(rsp, cors_origin, err.status);
         return Ok(());
     }
     if err.json_message {
-        json_response(rsp, state, err.status, json!({ "message": err.message }))
+        json_response(rsp, cors_origin, err.status, json!({ "message": err.message }))
     } else {
-        text_response(rsp, state, err.status, &err.message);
+        text_response(rsp, cors_origin, err.status, &err.message);
         Ok(())
     }
 }
@@ -572,13 +588,16 @@ impl HttpService for NotesService {
     fn call(&mut self, req: Request, rsp: &mut Response) -> io::Result<()> {
         let state = self.state.as_ref();
 
-        if req.method() == "OPTIONS" {
-            empty_response(rsp, state, 204);
-            return Ok(());
-        }
-
         let method = req.method().to_string();
         let path = req.path().split('?').next().unwrap_or("").to_string();
+        println!("Received request: {} {}", method, path);
+
+        let cors_origin = get_cors_origin(&req, state);
+
+        if req.method() == "OPTIONS" {
+            empty_response(rsp, cors_origin, 204);
+            return Ok(());
+        }
 
         let result = match (method.as_str(), path.as_str()) {
             ("POST", "/api/auth/login") => handle_login(req, state).map(|body| (200, body)),
@@ -594,18 +613,20 @@ impl HttpService for NotesService {
                 let id = path.trim_start_matches("/api/notes/");
                 match handle_delete_note(req, state, id) {
                     Ok(()) => {
-                        empty_response(rsp, state, 200);
+                        empty_response(rsp, cors_origin, 200);
                         return Ok(());
                     }
-                    Err(err) => return error_response(rsp, state, err),
+                    Err(err) => {
+                        return error_response(rsp, cors_origin, err);
+                    }
                 }
             }
             _ => Err(ApiError::not_found()),
         };
 
         match result {
-            Ok((status, body)) => json_response(rsp, state, status, body),
-            Err(err) => error_response(rsp, state, err),
+            Ok((status, body)) => json_response(rsp, cors_origin, status, body),
+            Err(err) => error_response(rsp, cors_origin, err),
         }
     }
 }
@@ -719,6 +740,8 @@ fn main() {
     {
         may::config().set_workers(workers);
     }
+    // Set larger stack size to prevent stack overflows in TLS/database handlers on Windows
+    may::config().set_stack_size(256 * 1024);
 
     println!("Connecting to Neon/Postgres...");
     let db = create_pool(&database_url);
