@@ -708,7 +708,7 @@ fn main() {
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(86_400_000);
     let cors_origin =
-        env::var("CORS_ALLOWED_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".to_string());
+        env::var("CORS_ALLOWED_ORIGIN").unwrap_or_else(|_| "https://react-frontend-for-rust-backend-notes.netlify.app".to_string());
     let cors_origin_header =
         Box::leak(format!("Access-Control-Allow-Origin: {cors_origin}").into_boxed_str());
 

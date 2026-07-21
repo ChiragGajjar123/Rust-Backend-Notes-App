@@ -14,6 +14,6 @@ services:
       - key: JWT_EXPIRATION_MS
         value: "86400000"
       - key: CORS_ALLOWED_ORIGIN
-        sync: false          # set to your frontend URL in the Render dashboard
+        value: "https://react-frontend-for-rust-backend-notes.netlify.app"
       - key: MAY_WORKERS
         value: "4"
