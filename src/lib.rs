@@ -23,7 +23,7 @@ static APP_STATE: OnceLock<Arc<AppState>> = OnceLock::new();
 struct AppConfig {
     jwt_secret: String,
     jwt_expiration_ms: i64,
-    cors_origin: String,
+    cors_allowed_origins: Vec<String>,
 }
 
 enum DbPool {
@@ -197,18 +197,31 @@ fn get_cors_origin(headers: &http::HeaderMap, state: &AppState) -> String {
         .unwrap_or("");
 
     if origin.is_empty() {
-        return state.config.cors_origin.clone();
+        return state
+            .config
+            .cors_allowed_origins
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "*".to_string());
     }
 
-    if origin == "http://localhost:5173"
-        || origin.ends_with(".vercel.app")
-        || origin.ends_with(".netlify.app")
-        || origin == state.config.cors_origin
-    {
-        origin.to_string()
-    } else {
-        state.config.cors_origin.clone()
+    for allowed in &state.config.cors_allowed_origins {
+        if allowed == "*" || allowed == origin {
+            return origin.to_string();
+        }
+        if let Some(suffix) = allowed.strip_prefix('*') {
+            if origin.ends_with(suffix) {
+                return origin.to_string();
+            }
+        }
     }
+
+    state
+        .config
+        .cors_allowed_origins
+        .first()
+        .cloned()
+        .unwrap_or_else(|| origin.to_string())
 }
 
 fn response_builder(
@@ -711,9 +724,20 @@ fn load_app_state() -> Result<Arc<AppState>, String> {
         .ok()
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(86_400_000);
-    let cors_origin = env::var("CORS_ALLOWED_ORIGIN").unwrap_or_else(|_| {
-        "https://react-frontend-for-rust-backend-notes.netlify.app".to_string()
-    });
+    let cors_allowed_origins = env::var("CORS_ALLOWED_ORIGIN")
+        .map(|val| {
+            val.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_else(|_| {
+            vec![
+                "http://localhost:5173".to_string(),
+                "*.vercel.app".to_string(),
+                "*.netlify.app".to_string(),
+            ]
+        });
 
     let db = create_pool(&database_url)?;
     if let Err(e) = ensure_schema(&db) {
@@ -725,7 +749,7 @@ fn load_app_state() -> Result<Arc<AppState>, String> {
         config: AppConfig {
             jwt_secret,
             jwt_expiration_ms,
-            cors_origin,
+            cors_allowed_origins,
         },
     }))
 }
