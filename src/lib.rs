@@ -196,7 +196,15 @@ fn get_cors_origin(headers: &http::HeaderMap, state: &AppState) -> String {
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
 
-    if origin == "http://localhost:5173" {
+    if origin.is_empty() {
+        return state.config.cors_origin.clone();
+    }
+
+    if origin == "http://localhost:5173"
+        || origin.ends_with(".vercel.app")
+        || origin.ends_with(".netlify.app")
+        || origin == state.config.cors_origin
+    {
         origin.to_string()
     } else {
         state.config.cors_origin.clone()
