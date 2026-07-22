@@ -1,7 +1,7 @@
 [package]
 name = "notes_vercel_backend"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 bcrypt = "0.19.2"
@@ -10,7 +10,7 @@ dotenvy = "0.15.7"
 http = "1"
 http-body-util = "0.1"
 jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
-native-tls = "0.2"
+native-tls = { version = "0.2", features = ["vendored"] }
 postgres = { version = "0.19", features = ["with-chrono-0_4", "with-uuid-1"] }
 postgres-native-tls = "0.5"
 r2d2 = "0.8"
@@ -24,3 +24,4 @@ vercel_runtime = "=2.3.0"
 [[bin]]
 name = "index"
 path = "api/index.rs"
+

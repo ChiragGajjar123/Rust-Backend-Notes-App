@@ -703,7 +703,9 @@ fn load_app_state() -> Result<Arc<AppState>, String> {
     });
 
     let db = create_pool(&database_url)?;
-    ensure_schema(&db)?;
+    if let Err(e) = ensure_schema(&db) {
+        eprintln!("Warning: ensure_schema returned: {}", e);
+    }
 
     Ok(Arc::new(AppState {
         db,
@@ -732,7 +734,7 @@ fn wants_tls(database_url: &str) -> bool {
 fn create_pool(database_url: &str) -> Result<DbPool, String> {
     let config: postgres::Config = database_url
         .parse()
-        .map_err(|_| "invalid DATABASE_URL / connection string".to_string())?;
+        .map_err(|e| format!("invalid DATABASE_URL / connection string: {}", e))?;
 
     if wants_tls(database_url) {
         let connector = TlsConnector::builder()
