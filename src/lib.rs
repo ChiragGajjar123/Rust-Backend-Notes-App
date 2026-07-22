@@ -2,8 +2,10 @@ use std::env;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use bcrypt::{DEFAULT_COST, hash, verify};
+use bcrypt::{hash, verify};
 use chrono::{DateTime, Utc};
+
+const BCRYPT_COST: u32 = 10;
 use dotenvy::dotenv;
 use http_body_util::BodyExt;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
@@ -258,6 +260,20 @@ fn json_response(
     )
 }
 
+fn json_response_with_cache(
+    cors_origin: &str,
+    status: u16,
+    value: Value,
+    cache_control: &str,
+) -> Result<Response<ResponseBody>, vercel_runtime::Error> {
+    let body = serde_json::to_vec(&value)?;
+    Ok(
+        response_builder(cors_origin, status, Some("application/json"))
+            .header("Cache-Control", cache_control)
+            .body(ResponseBody::from(body))?,
+    )
+}
+
 fn text_response(
     cors_origin: &str,
     status: u16,
@@ -454,7 +470,7 @@ fn handle_signup(body_bytes: &[u8], state: &AppState) -> Result<Value, ApiError>
         return Err(ApiError::bad_request("Error: Email is already in use!"));
     }
 
-    let password = hash(signup.password, DEFAULT_COST)
+    let password = hash(signup.password, BCRYPT_COST)
         .map_err(|_| ApiError::internal("Failed to hash password"))?;
 
     let mut conn = db_conn(state)?;
@@ -677,6 +693,9 @@ fn handle_request_sync(
     };
 
     match result {
+        Ok((status, body)) if method == "GET" && path == "/api/notes" => {
+            json_response_with_cache(&cors_origin, status, body, "private, max-age=5, stale-while-revalidate=30")
+        }
         Ok((status, body)) => json_response(&cors_origin, status, body),
         Err(err) => error_response(&cors_origin, err),
     }
