@@ -202,7 +202,7 @@ fn get_cors_origin(headers: &http::HeaderMap, state: &AppState) -> String {
             .cors_allowed_origins
             .first()
             .cloned()
-            .unwrap_or_else(|| "*".to_string());
+            .unwrap_or_default();
     }
 
     for allowed in &state.config.cors_allowed_origins {
@@ -216,12 +216,8 @@ fn get_cors_origin(headers: &http::HeaderMap, state: &AppState) -> String {
         }
     }
 
-    state
-        .config
-        .cors_allowed_origins
-        .first()
-        .cloned()
-        .unwrap_or_else(|| origin.to_string())
+    // Disallowed origin: return empty string so CORS check fails
+    String::new()
 }
 
 fn response_builder(
@@ -731,13 +727,7 @@ fn load_app_state() -> Result<Arc<AppState>, String> {
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<String>>()
         })
-        .unwrap_or_else(|_| {
-            vec![
-                "http://localhost:5173".to_string(),
-                "*.vercel.app".to_string(),
-                "*.netlify.app".to_string(),
-            ]
-        });
+        .unwrap_or_default();
 
     let db = create_pool(&database_url)?;
     if let Err(e) = ensure_schema(&db) {
