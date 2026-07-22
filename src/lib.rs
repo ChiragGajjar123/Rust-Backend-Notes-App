@@ -727,7 +727,13 @@ fn load_app_state() -> Result<Arc<AppState>, String> {
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<String>>()
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|_| {
+            vec![
+                "http://localhost:5173".to_string(),
+                "*.vercel.app".to_string(),
+                "*.netlify.app".to_string(),
+            ]
+        });
 
     let db = create_pool(&database_url)?;
     if let Err(e) = ensure_schema(&db) {
