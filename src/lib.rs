@@ -190,9 +190,8 @@ fn status_text(code: u16) -> &'static str {
     }
 }
 
-fn get_cors_origin(req: &Request, state: &AppState) -> String {
-    let origin = req
-        .headers()
+fn get_cors_origin(headers: &http::HeaderMap, state: &AppState) -> String {
+    let origin = headers
         .get("origin")
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
@@ -275,18 +274,12 @@ fn error_response(
     }
 }
 
-async fn read_json<T: for<'de> Deserialize<'de>>(req: Request) -> Result<T, ApiError> {
-    let bytes = req
-        .into_body()
-        .collect()
-        .await
-        .map_err(|_| ApiError::bad_request("Invalid request body"))?
-        .to_bytes();
-    serde_json::from_slice(&bytes).map_err(|_| ApiError::bad_request("Invalid JSON request body"))
+fn parse_json<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, ApiError> {
+    serde_json::from_slice(bytes).map_err(|_| ApiError::bad_request("Invalid JSON request body"))
 }
 
-fn auth_header(req: &Request) -> Option<String> {
-    req.headers()
+fn auth_header(headers: &http::HeaderMap) -> Option<String> {
+    headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
@@ -364,8 +357,8 @@ fn find_user_by_email(state: &AppState, email: &str) -> Result<Option<UserRow>, 
     Ok(row.map(|r| map_user(&r)))
 }
 
-fn current_user(req: &Request, state: &AppState) -> Result<UserRow, ApiError> {
-    let token = auth_header(req).ok_or_else(ApiError::unauthorized)?;
+fn current_user(headers: &http::HeaderMap, state: &AppState) -> Result<UserRow, ApiError> {
+    let token = auth_header(headers).ok_or_else(ApiError::unauthorized)?;
     let claims = decode::<Claims>(
         &token,
         &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
@@ -402,8 +395,8 @@ fn user_login_json(user: &UserRow, token: String) -> Value {
     })
 }
 
-async fn note_fields_from_request(req: Request) -> Result<NoteFields, ApiError> {
-    let note_request: NoteRequest = read_json(req).await?;
+fn note_fields_from_bytes(bytes: &[u8]) -> Result<NoteFields, ApiError> {
+    let note_request: NoteRequest = parse_json(bytes)?;
     Ok(NoteFields {
         title: note_request.title.unwrap_or_default(),
         content: note_request.content.unwrap_or_default(),
@@ -413,8 +406,8 @@ async fn note_fields_from_request(req: Request) -> Result<NoteFields, ApiError> 
     })
 }
 
-async fn handle_login(req: Request, state: &AppState) -> Result<Value, ApiError> {
-    let login: LoginRequest = read_json(req).await?;
+fn handle_login(body_bytes: &[u8], state: &AppState) -> Result<Value, ApiError> {
+    let login: LoginRequest = parse_json(body_bytes)?;
     let user = find_user_by_email(state, &login.email)?
         .ok_or_else(|| ApiError::bad_request("Bad credentials"))?;
     if !verify(&login.password, &user.password).unwrap_or(false) {
@@ -424,8 +417,8 @@ async fn handle_login(req: Request, state: &AppState) -> Result<Value, ApiError>
     Ok(user_login_json(&user, token))
 }
 
-async fn handle_signup(req: Request, state: &AppState) -> Result<Value, ApiError> {
-    let signup: SignupRequest = read_json(req).await?;
+fn handle_signup(body_bytes: &[u8], state: &AppState) -> Result<Value, ApiError> {
+    let signup: SignupRequest = parse_json(body_bytes)?;
     if signup.username.trim().len() < 3
         || signup.username.len() > 100
         || signup.email.trim().is_empty()
@@ -458,9 +451,9 @@ async fn handle_signup(req: Request, state: &AppState) -> Result<Value, ApiError
     Ok(json!({ "message": "User registered successfully!" }))
 }
 
-async fn handle_update_theme(req: Request, state: &AppState) -> Result<Value, ApiError> {
-    let user = current_user(&req, state)?;
-    let theme_request: ThemeRequest = read_json(req).await?;
+fn handle_update_theme(headers: &http::HeaderMap, body_bytes: &[u8], state: &AppState) -> Result<Value, ApiError> {
+    let user = current_user(headers, state)?;
+    let theme_request: ThemeRequest = parse_json(body_bytes)?;
     if theme_request.theme != "light" && theme_request.theme != "dark" {
         return Err(ApiError {
             status: 400,
@@ -483,8 +476,8 @@ async fn handle_update_theme(req: Request, state: &AppState) -> Result<Value, Ap
     }))
 }
 
-fn handle_get_notes(req: &Request, state: &AppState) -> Result<Value, ApiError> {
-    let user = current_user(req, state)?;
+fn handle_get_notes(headers: &http::HeaderMap, state: &AppState) -> Result<Value, ApiError> {
+    let user = current_user(headers, state)?;
     let mut conn = db_conn(state)?;
     let rows = conn
         .client()
@@ -503,9 +496,9 @@ fn handle_get_notes(req: &Request, state: &AppState) -> Result<Value, ApiError> 
     Ok(Value::Array(notes))
 }
 
-async fn handle_create_note(req: Request, state: &AppState) -> Result<Value, ApiError> {
-    let user = current_user(&req, state)?;
-    let fields = note_fields_from_request(req).await?;
+fn handle_create_note(headers: &http::HeaderMap, body_bytes: &[u8], state: &AppState) -> Result<Value, ApiError> {
+    let user = current_user(headers, state)?;
+    let fields = note_fields_from_bytes(body_bytes)?;
 
     let mut conn = db_conn(state)?;
     let row = conn
@@ -545,8 +538,8 @@ fn find_note_by_id(state: &AppState, id: Uuid) -> Result<Option<NoteRow>, ApiErr
     Ok(row.map(|r| map_note(&r)))
 }
 
-async fn handle_update_note(req: Request, state: &AppState, id: &str) -> Result<Value, ApiError> {
-    let user = current_user(&req, state)?;
+fn handle_update_note(headers: &http::HeaderMap, body_bytes: &[u8], state: &AppState, id: &str) -> Result<Value, ApiError> {
+    let user = current_user(headers, state)?;
     let note_id = parse_note_id(id)?;
     let existing = find_note_by_id(state, note_id)?.ok_or_else(ApiError::not_found)?;
 
@@ -556,7 +549,7 @@ async fn handle_update_note(req: Request, state: &AppState, id: &str) -> Result<
         ));
     }
 
-    let fields = note_fields_from_request(req).await?;
+    let fields = note_fields_from_bytes(body_bytes)?;
 
     let mut conn = db_conn(state)?;
     let row = conn
@@ -580,8 +573,8 @@ async fn handle_update_note(req: Request, state: &AppState, id: &str) -> Result<
     Ok(note_to_json(&map_note(&row)))
 }
 
-fn handle_delete_note(req: &Request, state: &AppState, id: &str) -> Result<(), ApiError> {
-    let user = current_user(req, state)?;
+fn handle_delete_note(headers: &http::HeaderMap, state: &AppState, id: &str) -> Result<(), ApiError> {
+    let user = current_user(headers, state)?;
     let note_id = parse_note_id(id)?;
     let existing = find_note_by_id(state, note_id)?.ok_or_else(ApiError::not_found)?;
 
@@ -605,9 +598,8 @@ fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
     })
 }
 
-fn request_path(req: &Request) -> String {
-    if let Some(path) = req
-        .uri()
+fn request_path(uri: &http::Uri) -> String {
+    if let Some(path) = uri
         .query()
         .and_then(|query| query_param(query, "path"))
     {
@@ -618,10 +610,13 @@ fn request_path(req: &Request) -> String {
         return format!("/api/{}", path.trim_start_matches('/'));
     }
 
-    req.uri().path().to_string()
+    uri.path().to_string()
 }
 
-pub async fn handle_request(req: Request) -> Result<Response<ResponseBody>, vercel_runtime::Error> {
+fn handle_request_sync(
+    parts: http::request::Parts,
+    body_bytes: Vec<u8>,
+) -> Result<Response<ResponseBody>, vercel_runtime::Error> {
     let state = match app_state() {
         Ok(state) => state,
         Err(err) => {
@@ -634,31 +629,29 @@ pub async fn handle_request(req: Request) -> Result<Response<ResponseBody>, verc
         }
     };
 
-    let method = req.method().as_str().to_string();
-    let path = request_path(&req);
-    let cors_origin = get_cors_origin(&req, state);
+    let method = parts.method.as_str().to_string();
+    let path = request_path(&parts.uri);
+    let cors_origin = get_cors_origin(&parts.headers, state);
 
     if method == "OPTIONS" {
         return empty_response(&cors_origin, 204);
     }
 
     let result = match (method.as_str(), path.as_str()) {
-        ("POST", "/api/auth/login") => handle_login(req, state).await.map(|body| (200, body)),
-        ("POST", "/api/auth/signup") => handle_signup(req, state).await.map(|body| (200, body)),
-        ("PUT", "/api/users/theme") => handle_update_theme(req, state)
-            .await
+        ("POST", "/api/auth/login") => handle_login(&body_bytes, state).map(|body| (200, body)),
+        ("POST", "/api/auth/signup") => handle_signup(&body_bytes, state).map(|body| (200, body)),
+        ("PUT", "/api/users/theme") => handle_update_theme(&parts.headers, &body_bytes, state)
             .map(|body| (200, body)),
-        ("GET", "/api/notes") => handle_get_notes(&req, state).map(|body| (200, body)),
-        ("POST", "/api/notes") => handle_create_note(req, state).await.map(|body| (201, body)),
+        ("GET", "/api/notes") => handle_get_notes(&parts.headers, state).map(|body| (200, body)),
+        ("POST", "/api/notes") => handle_create_note(&parts.headers, &body_bytes, state).map(|body| (201, body)),
         _ if method == "PUT" && path.starts_with("/api/notes/") => {
             let id = path.trim_start_matches("/api/notes/");
-            handle_update_note(req, state, id)
-                .await
+            handle_update_note(&parts.headers, &body_bytes, state, id)
                 .map(|body| (200, body))
         }
         _ if method == "DELETE" && path.starts_with("/api/notes/") => {
             let id = path.trim_start_matches("/api/notes/");
-            match handle_delete_note(&req, state, id) {
+            match handle_delete_note(&parts.headers, state, id) {
                 Ok(()) => return empty_response(&cors_origin, 200),
                 Err(err) => return error_response(&cors_origin, err),
             }
@@ -670,6 +663,18 @@ pub async fn handle_request(req: Request) -> Result<Response<ResponseBody>, verc
         Ok((status, body)) => json_response(&cors_origin, status, body),
         Err(err) => error_response(&cors_origin, err),
     }
+}
+
+pub async fn handle_request(req: Request) -> Result<Response<ResponseBody>, vercel_runtime::Error> {
+    let (parts, body) = req.into_parts();
+    let body_bytes = match body.collect().await {
+        Ok(collected) => collected.to_bytes().to_vec(),
+        Err(_) => Vec::new(),
+    };
+
+    tokio::task::spawn_blocking(move || handle_request_sync(parts, body_bytes))
+        .await
+        .map_err(|e| vercel_runtime::Error::from(e.to_string()))?
 }
 
 fn app_state() -> Result<&'static AppState, ApiError> {
