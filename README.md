@@ -1,84 +1,57 @@
-# Notes Rust Backend (Neon Postgres + JWT Auth)
+# Notes Rust Backend for Vercel
 
-`may_minihttp` implementation of the existing Notes API, backed by **Neon Postgres** with **JWT + bcrypt auth**.
+Rust serverless implementation of the Notes API, backed by Neon/Postgres with JWT and bcrypt auth.
 
-The HTTP contract matches the Spring backend so the React frontend works without changes.
-
-## API (unchanged)
+The HTTP contract matches the existing frontend API:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `POST` | `/api/auth/signup` | No | Register user |
-| `POST` | `/api/auth/login` | No | Login → JWT |
+| `POST` | `/api/auth/login` | No | Login and return JWT |
 | `PUT` | `/api/users/theme` | Bearer | Update light/dark theme |
-| `GET` | `/api/notes` | Bearer | List notes (pinned first) |
+| `GET` | `/api/notes` | Bearer | List notes, pinned first |
 | `POST` | `/api/notes` | Bearer | Create note |
 | `PUT` | `/api/notes/{id}` | Bearer | Update note |
 | `DELETE` | `/api/notes/{id}` | Bearer | Delete note |
 
-## Setup Neon
+## Vercel Structure
 
-1. Create a project at [https://console.neon.tech](https://console.neon.tech)
-2. Copy the connection string (URI) from **Connection Details**
-3. Configure env:
+- `api/index.rs` is the Vercel Rust function entrypoint.
+- `src/lib.rs` contains the shared API/router/database/auth code.
+- `vercel.json` rewrites `/api/*` requests into the single Rust function.
+- `Cargo.toml` is the only Cargo manifest.
 
-```powershell
-cd "Rust backend"
-copy .env.example .env
-# Edit .env and set DATABASE_URL to your Neon URI
-```
+## Environment Variables
 
-Example:
+Set these in the Vercel dashboard:
 
 ```env
-DATABASE_URL=postgresql://USER:PASSWORD@ep-xxxx.us-east-2.aws.neon.tech/neondb?sslmode=require
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require
 JWT_SECRET=change-me-to-a-long-random-secret
-CORS_ALLOWED_ORIGIN=http://localhost:5173
-PORT=8080
+JWT_EXPIRATION_MS=86400000
+CORS_ALLOWED_ORIGIN=https://your-frontend-domain.example
 ```
 
-Tables are created automatically on startup (`users`, `notes`). See `schema.sql` for the full DDL.
+`DATABASE_URL` may also be provided as `NEON_DATABASE_URL`. Tables and indexes are created automatically on cold start if they do not exist.
 
-## Run
+## Deploy
 
 ```powershell
-cd "Rust backend"
-cargo run --release
+vercel deploy --prod
 ```
 
-Point the frontend at the same base URL as before:
+For local Vercel development:
+
+```powershell
+vercel dev
+```
+
+Point the frontend at:
 
 ```env
-# frontend/.env
-VITE_API_URL=http://localhost:8080/api
+VITE_API_URL=https://your-vercel-app.vercel.app/api
 ```
 
-## Auth
+## Database
 
-- Passwords hashed with **bcrypt** (same idea as Spring `BCryptPasswordEncoder`)
-- Tokens are **JWT HMAC-SHA256** with claim `sub` = username
-- Protected routes require `Authorization: Bearer <token>`
-- Login response shape (frontend-compatible):
-
-```json
-{
-  "accessToken": "...",
-  "tokenType": "Bearer",
-  "id": "uuid",
-  "username": "...",
-  "email": "...",
-  "theme": "light"
-}
-```
-
-## Local Postgres (optional)
-
-```env
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/notes_app_db?sslmode=disable
-```
-
-## Notes
-
-- IDs are UUIDs (JSON strings), same string-id usage as the Mongo/Spring app
-- `MAY_WORKERS` controls the may scheduler worker count
-- Prefer `cargo run --release` for real load testing
+The schema is kept in `schema.sql` for reference and manual setup. The function also runs the same schema creation during initialization.

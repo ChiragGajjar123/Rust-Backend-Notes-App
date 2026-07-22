@@ -1,14 +1,12 @@
 use std::env;
-use std::io::{self, Read};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bcrypt::{DEFAULT_COST, hash, verify};
-use bytes::BufMut;
 use chrono::{DateTime, Utc};
 use dotenvy::dotenv;
+use http_body_util::BodyExt;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
-use may_minihttp::{HttpServer, HttpService, Request, Response};
 use native_tls::TlsConnector;
 use postgres::NoTls;
 use postgres_native_tls::MakeTlsConnector;
@@ -17,19 +15,17 @@ use r2d2_postgres::PostgresConnectionManager;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
+use vercel_runtime::{Request, Response, ResponseBody};
 
-// ---------------------------------------------------------------------------
-// App state / config
-// ---------------------------------------------------------------------------
+static APP_STATE: OnceLock<Result<Arc<AppState>, String>> = OnceLock::new();
 
 #[derive(Clone)]
 struct AppConfig {
     jwt_secret: String,
     jwt_expiration_ms: i64,
-    cors_origin_header: &'static str,
+    cors_origin: String,
 }
 
-/// Connection pool that works for Neon (TLS) and local Postgres (optional NoTls).
 enum DbPool {
     Tls(Pool<PostgresConnectionManager<MakeTlsConnector>>),
     Plain(Pool<PostgresConnectionManager<NoTls>>),
@@ -63,15 +59,6 @@ struct AppState {
     config: AppConfig,
 }
 
-#[derive(Clone)]
-struct NotesService {
-    state: Arc<AppState>,
-}
-
-// ---------------------------------------------------------------------------
-// Models / DTOs
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Claims {
     sub: String,
@@ -81,7 +68,7 @@ struct Claims {
 
 #[derive(Debug)]
 struct ApiError {
-    status: usize,
+    status: u16,
     message: String,
     json_message: bool,
 }
@@ -128,7 +115,6 @@ impl ApiError {
     }
 }
 
-#[derive(Clone)]
 struct UserRow {
     id: Uuid,
     username: String,
@@ -137,7 +123,6 @@ struct UserRow {
     theme: String,
 }
 
-#[derive(Clone)]
 struct NoteRow {
     id: Uuid,
     user_id: Uuid,
@@ -177,9 +162,13 @@ struct NoteRequest {
     pinned: Option<bool>,
 }
 
-// ---------------------------------------------------------------------------
-// HTTP helpers
-// ---------------------------------------------------------------------------
+struct NoteFields {
+    title: String,
+    content: String,
+    tags: Vec<String>,
+    color: String,
+    pinned: bool,
+}
 
 fn now_seconds() -> usize {
     SystemTime::now()
@@ -188,7 +177,7 @@ fn now_seconds() -> usize {
         .as_secs() as usize
 }
 
-fn status_text(code: usize) -> &'static str {
+fn status_text(code: u16) -> &'static str {
     match code {
         200 => "Ok",
         201 => "Created",
@@ -197,93 +186,112 @@ fn status_text(code: usize) -> &'static str {
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
-        405 => "Method Not Allowed",
         _ => "Internal Server Error",
     }
 }
 
-fn get_cors_origin(req: &Request, state: &AppState) -> &'static str {
-    let origin = req.headers()
-        .iter()
-        .find(|h| h.name.eq_ignore_ascii_case("origin"))
-        .and_then(|h| std::str::from_utf8(h.value).ok())
+fn get_cors_origin(req: &Request, state: &AppState) -> String {
+    let origin = req
+        .headers()
+        .get("origin")
+        .and_then(|value| value.to_str().ok())
         .unwrap_or("");
 
     if origin == "http://localhost:5173" {
-        "Access-Control-Allow-Origin: http://localhost:5173"
+        origin.to_string()
     } else {
-        state.config.cors_origin_header
+        state.config.cors_origin.clone()
     }
 }
 
-fn add_common_headers(rsp: &mut Response, cors_origin: &'static str) {
-    rsp.header(cors_origin)
-        .header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS")
-        .header("Access-Control-Allow-Headers: Authorization, Content-Type, Accept")
-        .header("Access-Control-Allow-Credentials: true")
-        .header("Connection: close");
+fn response_builder(
+    cors_origin: &str,
+    status: u16,
+    content_type: Option<&str>,
+) -> http::response::Builder {
+    let mut builder = Response::builder()
+        .status(status)
+        .header("Access-Control-Allow-Origin", cors_origin)
+        .header(
+            "Access-Control-Allow-Methods",
+            "GET, POST, PUT, DELETE, OPTIONS",
+        )
+        .header(
+            "Access-Control-Allow-Headers",
+            "Authorization, Content-Type, Accept",
+        )
+        .header("Access-Control-Allow-Credentials", "true")
+        .header("Connection", "close");
+
+    if let Some(content_type) = content_type {
+        builder = builder.header("Content-Type", content_type);
+    }
+
+    builder
 }
 
 fn json_response(
-    rsp: &mut Response,
-    cors_origin: &'static str,
-    status: usize,
+    cors_origin: &str,
+    status: u16,
     value: Value,
-) -> io::Result<()> {
-    rsp.status_code(status, status_text(status));
-    add_common_headers(rsp, cors_origin);
-    rsp.header("Content-Type: application/json");
-    let bytes = serde_json::to_vec(&value)?;
-    rsp.body_vec(bytes);
-    Ok(())
+) -> Result<Response<ResponseBody>, vercel_runtime::Error> {
+    let body = serde_json::to_vec(&value)?;
+    Ok(
+        response_builder(cors_origin, status, Some("application/json"))
+            .body(ResponseBody::from(body))?,
+    )
 }
 
-fn text_response(rsp: &mut Response, cors_origin: &'static str, status: usize, text: &str) {
-    rsp.status_code(status, status_text(status));
-    add_common_headers(rsp, cors_origin);
-    rsp.header("Content-Type: text/plain; charset=utf-8");
-    rsp.body_vec(text.as_bytes().to_vec());
+fn text_response(
+    cors_origin: &str,
+    status: u16,
+    text: &str,
+) -> Result<Response<ResponseBody>, vercel_runtime::Error> {
+    Ok(
+        response_builder(cors_origin, status, Some("text/plain; charset=utf-8"))
+            .body(ResponseBody::from(text.to_string()))?,
+    )
 }
 
-fn empty_response(rsp: &mut Response, cors_origin: &'static str, status: usize) {
-    rsp.status_code(status, status_text(status));
-    add_common_headers(rsp, cors_origin);
-    rsp.body("");
+fn empty_response(
+    cors_origin: &str,
+    status: u16,
+) -> Result<Response<ResponseBody>, vercel_runtime::Error> {
+    Ok(response_builder(cors_origin, status, None).body(ResponseBody::from(""))?)
 }
 
-fn error_response(rsp: &mut Response, cors_origin: &'static str, err: ApiError) -> io::Result<()> {
+fn error_response(
+    cors_origin: &str,
+    err: ApiError,
+) -> Result<Response<ResponseBody>, vercel_runtime::Error> {
     if err.message.is_empty() {
-        empty_response(rsp, cors_origin, err.status);
-        return Ok(());
+        return empty_response(cors_origin, err.status);
     }
+
     if err.json_message {
-        json_response(rsp, cors_origin, err.status, json!({ "message": err.message }))
+        json_response(cors_origin, err.status, json!({ "message": err.message }))
     } else {
-        text_response(rsp, cors_origin, err.status, &err.message);
-        Ok(())
+        text_response(cors_origin, err.status, &err.message)
     }
 }
 
-fn read_json<T: for<'de> Deserialize<'de>>(req: Request) -> Result<T, ApiError> {
-    let mut body = req.body();
-    let mut bytes = Vec::new();
-    body.read_to_end(&mut bytes)
-        .map_err(|_| ApiError::bad_request("Invalid request body"))?;
+async fn read_json<T: for<'de> Deserialize<'de>>(req: Request) -> Result<T, ApiError> {
+    let bytes = req
+        .into_body()
+        .collect()
+        .await
+        .map_err(|_| ApiError::bad_request("Invalid request body"))?
+        .to_bytes();
     serde_json::from_slice(&bytes).map_err(|_| ApiError::bad_request("Invalid JSON request body"))
 }
 
 fn auth_header(req: &Request) -> Option<String> {
     req.headers()
-        .iter()
-        .find(|h| h.name.eq_ignore_ascii_case("authorization"))
-        .and_then(|h| std::str::from_utf8(h.value).ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
         .map(ToOwned::to_owned)
 }
-
-// ---------------------------------------------------------------------------
-// Auth (JWT + bcrypt) — same contract as Spring backend
-// ---------------------------------------------------------------------------
 
 fn generate_jwt(username: &str, config: &AppConfig) -> Result<String, ApiError> {
     let iat = now_seconds();
@@ -394,12 +402,19 @@ fn user_login_json(user: &UserRow, token: String) -> Value {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Handlers — same routes / status codes / payloads as Spring API
-// ---------------------------------------------------------------------------
+async fn note_fields_from_request(req: Request) -> Result<NoteFields, ApiError> {
+    let note_request: NoteRequest = read_json(req).await?;
+    Ok(NoteFields {
+        title: note_request.title.unwrap_or_default(),
+        content: note_request.content.unwrap_or_default(),
+        tags: note_request.tags.unwrap_or_default(),
+        color: note_request.color.unwrap_or_default(),
+        pinned: note_request.pinned.unwrap_or(false),
+    })
+}
 
-fn handle_login(req: Request, state: &AppState) -> Result<Value, ApiError> {
-    let login: LoginRequest = read_json(req)?;
+async fn handle_login(req: Request, state: &AppState) -> Result<Value, ApiError> {
+    let login: LoginRequest = read_json(req).await?;
     let user = find_user_by_email(state, &login.email)?
         .ok_or_else(|| ApiError::bad_request("Bad credentials"))?;
     if !verify(&login.password, &user.password).unwrap_or(false) {
@@ -409,8 +424,8 @@ fn handle_login(req: Request, state: &AppState) -> Result<Value, ApiError> {
     Ok(user_login_json(&user, token))
 }
 
-fn handle_signup(req: Request, state: &AppState) -> Result<Value, ApiError> {
-    let signup: SignupRequest = read_json(req)?;
+async fn handle_signup(req: Request, state: &AppState) -> Result<Value, ApiError> {
+    let signup: SignupRequest = read_json(req).await?;
     if signup.username.trim().len() < 3
         || signup.username.len() > 100
         || signup.email.trim().is_empty()
@@ -443,9 +458,9 @@ fn handle_signup(req: Request, state: &AppState) -> Result<Value, ApiError> {
     Ok(json!({ "message": "User registered successfully!" }))
 }
 
-fn handle_update_theme(req: Request, state: &AppState) -> Result<Value, ApiError> {
+async fn handle_update_theme(req: Request, state: &AppState) -> Result<Value, ApiError> {
     let user = current_user(&req, state)?;
-    let theme_request: ThemeRequest = read_json(req)?;
+    let theme_request: ThemeRequest = read_json(req).await?;
     if theme_request.theme != "light" && theme_request.theme != "dark" {
         return Err(ApiError {
             status: 400,
@@ -468,8 +483,8 @@ fn handle_update_theme(req: Request, state: &AppState) -> Result<Value, ApiError
     }))
 }
 
-fn handle_get_notes(req: Request, state: &AppState) -> Result<Value, ApiError> {
-    let user = current_user(&req, state)?;
+fn handle_get_notes(req: &Request, state: &AppState) -> Result<Value, ApiError> {
+    let user = current_user(req, state)?;
     let mut conn = db_conn(state)?;
     let rows = conn
         .client()
@@ -488,15 +503,9 @@ fn handle_get_notes(req: Request, state: &AppState) -> Result<Value, ApiError> {
     Ok(Value::Array(notes))
 }
 
-fn handle_create_note(req: Request, state: &AppState) -> Result<Value, ApiError> {
+async fn handle_create_note(req: Request, state: &AppState) -> Result<Value, ApiError> {
     let user = current_user(&req, state)?;
-    let note_request: NoteRequest = read_json(req)?;
-
-    let title = note_request.title.unwrap_or_default();
-    let content = note_request.content.unwrap_or_default();
-    let tags = note_request.tags.unwrap_or_default();
-    let color = note_request.color.unwrap_or_default();
-    let pinned = note_request.pinned.unwrap_or(false);
+    let fields = note_fields_from_request(req).await?;
 
     let mut conn = db_conn(state)?;
     let row = conn
@@ -505,7 +514,14 @@ fn handle_create_note(req: Request, state: &AppState) -> Result<Value, ApiError>
             "INSERT INTO notes (user_id, title, content, tags, color, pinned) \
              VALUES ($1, $2, $3, $4, $5, $6) \
              RETURNING id, user_id, title, content, tags, color, pinned, created_at, updated_at",
-            &[&user.id, &title, &content, &tags, &color, &pinned],
+            &[
+                &user.id,
+                &fields.title,
+                &fields.content,
+                &fields.tags,
+                &fields.color,
+                &fields.pinned,
+            ],
         )
         .map_err(|_| ApiError::internal("Database error"))?;
 
@@ -529,7 +545,7 @@ fn find_note_by_id(state: &AppState, id: Uuid) -> Result<Option<NoteRow>, ApiErr
     Ok(row.map(|r| map_note(&r)))
 }
 
-fn handle_update_note(req: Request, state: &AppState, id: &str) -> Result<Value, ApiError> {
+async fn handle_update_note(req: Request, state: &AppState, id: &str) -> Result<Value, ApiError> {
     let user = current_user(&req, state)?;
     let note_id = parse_note_id(id)?;
     let existing = find_note_by_id(state, note_id)?.ok_or_else(ApiError::not_found)?;
@@ -540,12 +556,7 @@ fn handle_update_note(req: Request, state: &AppState, id: &str) -> Result<Value,
         ));
     }
 
-    let note_request: NoteRequest = read_json(req)?;
-    let title = note_request.title.unwrap_or_default();
-    let content = note_request.content.unwrap_or_default();
-    let tags = note_request.tags.unwrap_or_default();
-    let color = note_request.color.unwrap_or_default();
-    let pinned = note_request.pinned.unwrap_or(false);
+    let fields = note_fields_from_request(req).await?;
 
     let mut conn = db_conn(state)?;
     let row = conn
@@ -555,15 +566,22 @@ fn handle_update_note(req: Request, state: &AppState, id: &str) -> Result<Value,
              updated_at = NOW() \
              WHERE id = $6 \
              RETURNING id, user_id, title, content, tags, color, pinned, created_at, updated_at",
-            &[&title, &content, &tags, &color, &pinned, &note_id],
+            &[
+                &fields.title,
+                &fields.content,
+                &fields.tags,
+                &fields.color,
+                &fields.pinned,
+                &note_id,
+            ],
         )
         .map_err(|_| ApiError::internal("Database error"))?;
 
     Ok(note_to_json(&map_note(&row)))
 }
 
-fn handle_delete_note(req: Request, state: &AppState, id: &str) -> Result<(), ApiError> {
-    let user = current_user(&req, state)?;
+fn handle_delete_note(req: &Request, state: &AppState, id: &str) -> Result<(), ApiError> {
+    let user = current_user(req, state)?;
     let note_id = parse_note_id(id)?;
     let existing = find_note_by_id(state, note_id)?.ok_or_else(ApiError::not_found)?;
 
@@ -580,106 +598,163 @@ fn handle_delete_note(req: Request, state: &AppState, id: &str) -> Result<(), Ap
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Router
-// ---------------------------------------------------------------------------
+fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+    query.split('&').find_map(|part| {
+        let (name, value) = part.split_once('=')?;
+        (name == key).then_some(value)
+    })
+}
 
-impl HttpService for NotesService {
-    fn call(&mut self, req: Request, rsp: &mut Response) -> io::Result<()> {
-        let state = self.state.as_ref();
-
-        let method = req.method().to_string();
-        let path = req.path().split('?').next().unwrap_or("").to_string();
-        println!("Received request: {} {}", method, path);
-
-        let cors_origin = get_cors_origin(&req, state);
-
-        if req.method() == "OPTIONS" {
-            empty_response(rsp, cors_origin, 204);
-            return Ok(());
+fn request_path(req: &Request) -> String {
+    if let Some(path) = req
+        .uri()
+        .query()
+        .and_then(|query| query_param(query, "path"))
+    {
+        let path = path.replace("%2F", "/").replace("%2f", "/");
+        if path.is_empty() {
+            return "/api".to_string();
         }
+        return format!("/api/{}", path.trim_start_matches('/'));
+    }
 
-        let result = match (method.as_str(), path.as_str()) {
-            ("POST", "/api/auth/login") => handle_login(req, state).map(|body| (200, body)),
-            ("POST", "/api/auth/signup") => handle_signup(req, state).map(|body| (200, body)),
-            ("PUT", "/api/users/theme") => handle_update_theme(req, state).map(|body| (200, body)),
-            ("GET", "/api/notes") => handle_get_notes(req, state).map(|body| (200, body)),
-            ("POST", "/api/notes") => handle_create_note(req, state).map(|body| (201, body)),
-            _ if method == "PUT" && path.starts_with("/api/notes/") => {
-                let id = path.trim_start_matches("/api/notes/");
-                handle_update_note(req, state, id).map(|body| (200, body))
-            }
-            _ if method == "DELETE" && path.starts_with("/api/notes/") => {
-                let id = path.trim_start_matches("/api/notes/");
-                match handle_delete_note(req, state, id) {
-                    Ok(()) => {
-                        empty_response(rsp, cors_origin, 200);
-                        return Ok(());
-                    }
-                    Err(err) => {
-                        return error_response(rsp, cors_origin, err);
-                    }
-                }
-            }
-            _ => Err(ApiError::not_found()),
-        };
+    req.uri().path().to_string()
+}
 
-        match result {
-            Ok((status, body)) => json_response(rsp, cors_origin, status, body),
-            Err(err) => error_response(rsp, cors_origin, err),
+pub async fn handle_request(req: Request) -> Result<Response<ResponseBody>, vercel_runtime::Error> {
+    let state = match app_state() {
+        Ok(state) => state,
+        Err(err) => {
+            return Ok(Response::builder()
+                .status(500)
+                .header("Content-Type", "application/json")
+                .body(ResponseBody::from(
+                    json!({ "message": err.message }).to_string(),
+                ))?);
         }
+    };
+
+    let method = req.method().as_str().to_string();
+    let path = request_path(&req);
+    let cors_origin = get_cors_origin(&req, state);
+
+    if method == "OPTIONS" {
+        return empty_response(&cors_origin, 204);
+    }
+
+    let result = match (method.as_str(), path.as_str()) {
+        ("POST", "/api/auth/login") => handle_login(req, state).await.map(|body| (200, body)),
+        ("POST", "/api/auth/signup") => handle_signup(req, state).await.map(|body| (200, body)),
+        ("PUT", "/api/users/theme") => handle_update_theme(req, state)
+            .await
+            .map(|body| (200, body)),
+        ("GET", "/api/notes") => handle_get_notes(&req, state).map(|body| (200, body)),
+        ("POST", "/api/notes") => handle_create_note(req, state).await.map(|body| (201, body)),
+        _ if method == "PUT" && path.starts_with("/api/notes/") => {
+            let id = path.trim_start_matches("/api/notes/");
+            handle_update_note(req, state, id)
+                .await
+                .map(|body| (200, body))
+        }
+        _ if method == "DELETE" && path.starts_with("/api/notes/") => {
+            let id = path.trim_start_matches("/api/notes/");
+            match handle_delete_note(&req, state, id) {
+                Ok(()) => return empty_response(&cors_origin, 200),
+                Err(err) => return error_response(&cors_origin, err),
+            }
+        }
+        _ => Err(ApiError::not_found()),
+    };
+
+    match result {
+        Ok((status, body)) => json_response(&cors_origin, status, body),
+        Err(err) => error_response(&cors_origin, err),
     }
 }
 
-// ---------------------------------------------------------------------------
-// DB bootstrap (Neon Postgres)
-// ---------------------------------------------------------------------------
+fn app_state() -> Result<&'static AppState, ApiError> {
+    APP_STATE
+        .get_or_init(load_app_state)
+        .as_ref()
+        .map(|state| state.as_ref())
+        .map_err(|message| ApiError::internal(message.clone()))
+}
+
+fn load_app_state() -> Result<Arc<AppState>, String> {
+    dotenv().ok();
+
+    let database_url = env::var("DATABASE_URL")
+        .or_else(|_| env::var("NEON_DATABASE_URL"))
+        .map_err(|_| "DATABASE_URL is not configured".to_string())?;
+    let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| {
+        "secretKeyNotesAppJWTSecretTokenGeneratorCustomString1234567890!".into()
+    });
+    let jwt_expiration_ms = env::var("JWT_EXPIRATION_MS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(86_400_000);
+    let cors_origin = env::var("CORS_ALLOWED_ORIGIN").unwrap_or_else(|_| {
+        "https://react-frontend-for-rust-backend-notes.netlify.app".to_string()
+    });
+
+    let db = create_pool(&database_url)?;
+    ensure_schema(&db)?;
+
+    Ok(Arc::new(AppState {
+        db,
+        config: AppConfig {
+            jwt_secret,
+            jwt_expiration_ms,
+            cors_origin,
+        },
+    }))
+}
 
 fn wants_tls(database_url: &str) -> bool {
     let lower = database_url.to_ascii_lowercase();
     if lower.contains("sslmode=disable") {
         return false;
     }
-    // Neon always needs TLS; local defaults can opt out via sslmode=disable.
-    if lower.contains("neon.tech") || lower.contains("sslmode=require") || lower.contains("sslmode=verify")
+    if lower.contains("neon.tech")
+        || lower.contains("sslmode=require")
+        || lower.contains("sslmode=verify")
     {
         return true;
     }
-    // Default: TLS for remote hosts, plain for localhost
     !(lower.contains("localhost") || lower.contains("127.0.0.1"))
 }
 
-fn create_pool(database_url: &str) -> DbPool {
+fn create_pool(database_url: &str) -> Result<DbPool, String> {
     let config: postgres::Config = database_url
         .parse()
-        .expect("invalid DATABASE_URL / connection string");
+        .map_err(|_| "invalid DATABASE_URL / connection string".to_string())?;
 
     if wants_tls(database_url) {
         let connector = TlsConnector::builder()
             .build()
-            .expect("failed to create TLS connector");
+            .map_err(|_| "failed to create TLS connector".to_string())?;
         let tls = MakeTlsConnector::new(connector);
         let manager = PostgresConnectionManager::new(config, tls);
-        let pool = Pool::builder()
-            .max_size(10)
+        Pool::builder()
+            .max_size(2)
             .build(manager)
-            .expect("failed to create Postgres pool (TLS)");
-        DbPool::Tls(pool)
+            .map(DbPool::Tls)
+            .map_err(|_| "failed to create Postgres pool (TLS)".to_string())
     } else {
         let manager = PostgresConnectionManager::new(config, NoTls);
-        let pool = Pool::builder()
-            .max_size(10)
+        Pool::builder()
+            .max_size(2)
             .build(manager)
-            .expect("failed to create Postgres pool");
-        DbPool::Plain(pool)
+            .map(DbPool::Plain)
+            .map_err(|_| "failed to create Postgres pool".to_string())
     }
 }
 
-fn ensure_schema(pool: &DbPool) {
-    let mut conn = pool.get().expect("failed to get DB connection for schema setup");
-    let client = conn.client();
-
-    client
+fn ensure_schema(pool: &DbPool) -> Result<(), String> {
+    let mut conn = pool
+        .get()
+        .map_err(|_| "failed to get DB connection for schema setup".to_string())?;
+    conn.client()
         .batch_execute(
             r#"
             CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -709,59 +784,10 @@ fn ensure_schema(pool: &DbPool) {
                 ON notes(user_id, pinned DESC, updated_at DESC);
             "#,
         )
-        .expect("failed to initialize database schema");
+        .map_err(|_| "failed to initialize database schema".to_string())
 }
 
-fn main() {
-    dotenv().ok();
-
-    let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
-        env::var("NEON_DATABASE_URL").unwrap_or_else(|_| {
-            "postgresql://postgres:postgres@localhost:5432/notes_app_db?sslmode=disable".into()
-        })
-    });
-    let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| {
-        "secretKeyNotesAppJWTSecretTokenGeneratorCustomString1234567890!".into()
-    });
-    let jwt_expiration_ms = env::var("JWT_EXPIRATION_MS")
-        .ok()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(86_400_000);
-    let cors_origin =
-        env::var("CORS_ALLOWED_ORIGIN").unwrap_or_else(|_| "https://react-frontend-for-rust-backend-notes.netlify.app".to_string());
-    let cors_origin_header =
-        Box::leak(format!("Access-Control-Allow-Origin: {cors_origin}").into_boxed_str());
-
-    if let Some(workers) = env::var("MAY_WORKERS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|v| *v > 0)
-    {
-        may::config().set_workers(workers);
-    }
-    // Set larger stack size to prevent stack overflows in TLS/database handlers on Windows
-    may::config().set_stack_size(256 * 1024);
-
-    println!("Connecting to Neon/Postgres...");
-    let db = create_pool(&database_url);
-    ensure_schema(&db);
-    println!("Database schema ready.");
-
-    let state = Arc::new(AppState {
-        db,
-        config: AppConfig {
-            jwt_secret,
-            jwt_expiration_ms,
-            cors_origin_header,
-        },
-    });
-
-    let addr = format!("0.0.0.0:{port}");
-    println!("Rust notes backend listening on http://{addr}");
-    println!("API: /api/auth/login|signup  /api/users/theme  /api/notes");
-    let server = HttpServer(NotesService { state })
-        .start(addr)
-        .expect("failed to start HTTP server");
-    server.wait();
+#[allow(dead_code)]
+fn _status_text_for_contract(status: u16) -> &'static str {
+    status_text(status)
 }
