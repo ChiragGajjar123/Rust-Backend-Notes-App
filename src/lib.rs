@@ -1,6 +1,6 @@
 use std::env;
 use std::sync::{Arc, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bcrypt::{DEFAULT_COST, hash, verify};
 use chrono::{DateTime, Utc};
@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 use vercel_runtime::{Request, Response, ResponseBody};
 
-static APP_STATE: OnceLock<Result<Arc<AppState>, String>> = OnceLock::new();
+static APP_STATE: OnceLock<Arc<AppState>> = OnceLock::new();
 
 #[derive(Clone)]
 struct AppConfig {
@@ -673,11 +673,16 @@ pub async fn handle_request(req: Request) -> Result<Response<ResponseBody>, verc
 }
 
 fn app_state() -> Result<&'static AppState, ApiError> {
-    APP_STATE
-        .get_or_init(load_app_state)
-        .as_ref()
-        .map(|state| state.as_ref())
-        .map_err(|message| ApiError::internal(message.clone()))
+    // Fast path: already initialised successfully.
+    if let Some(state) = APP_STATE.get() {
+        return Ok(state.as_ref());
+    }
+
+    // Slow path: try to initialise. Errors are NOT cached so that a
+    // transient DB hiccup doesn't permanently poison the warm instance.
+    let state = load_app_state().map_err(|msg| ApiError::internal(msg))?;
+    let _ = APP_STATE.set(state);
+    Ok(APP_STATE.get().expect("APP_STATE was just set").as_ref())
 }
 
 fn load_app_state() -> Result<Arc<AppState>, String> {
@@ -737,6 +742,7 @@ fn create_pool(database_url: &str) -> Result<DbPool, String> {
         let manager = PostgresConnectionManager::new(config, tls);
         Pool::builder()
             .max_size(2)
+            .connection_timeout(Duration::from_secs(5))
             .build(manager)
             .map(DbPool::Tls)
             .map_err(|_| "failed to create Postgres pool (TLS)".to_string())
@@ -744,6 +750,7 @@ fn create_pool(database_url: &str) -> Result<DbPool, String> {
         let manager = PostgresConnectionManager::new(config, NoTls);
         Pool::builder()
             .max_size(2)
+            .connection_timeout(Duration::from_secs(5))
             .build(manager)
             .map(DbPool::Plain)
             .map_err(|_| "failed to create Postgres pool".to_string())
