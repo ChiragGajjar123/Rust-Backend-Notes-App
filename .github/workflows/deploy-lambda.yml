@@ -142,8 +142,7 @@ jobs:
               "MaxDbConnections=5" \
               "JwtExpirationMs=86400000" \
               "BcryptCost=10" \
-              "ProvisionedConcurrency=0" \
-              "ReservedConcurrency=10"
+              "ProvisionedConcurrency=0"
 
       - name: Get API Endpoint
         id: endpoint

@@ -115,7 +115,6 @@ Resources:
       CodeUri: .
       Handler: bootstrap
       Description: Notes App Rust Backend
-      ReservedConcurrentExecutions: !Ref ReservedConcurrency
       AutoPublishAlias: live
       # Provisioned Concurrency — only if > 0 (costs money, skip for free tier)
       ProvisionedConcurrencyConfig:
