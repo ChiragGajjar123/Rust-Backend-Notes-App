@@ -63,7 +63,7 @@ Conditions:
 Globals:
   Function:
     Timeout: 30
-    MemorySize: 128
+    MemorySize: 256
     Runtime: provided.al2023
     Architectures:
       - x86_64

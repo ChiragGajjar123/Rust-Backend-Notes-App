@@ -6,7 +6,7 @@ pub type DbPool = Pool<Postgres>;
 pub async fn create_pool(database_url: &str, max_connections: u32) -> Result<DbPool, sqlx::Error> {
     PgPoolOptions::new()
         .max_connections(max_connections)
-        .min_connections(5)
+        .min_connections(0)
         .acquire_timeout(Duration::from_secs(10))
         .idle_timeout(Duration::from_secs(300))
         .max_lifetime(Duration::from_secs(1800))
