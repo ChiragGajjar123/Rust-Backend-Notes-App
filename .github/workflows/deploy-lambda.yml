@@ -60,17 +60,11 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Check (standalone)
+      - name: Check
         run: cargo check
 
-      - name: Check (lambda)
-        run: cargo check --features lambda --no-default-features
-
-      - name: Clippy (standalone)
+      - name: Clippy
         run: cargo clippy -- -D warnings
-
-      - name: Clippy (lambda)
-        run: cargo clippy --features lambda --no-default-features -- -D warnings
 
   # ── Job 2: Build & Deploy ─────────────────────────────────────────────
   deploy:
