@@ -130,6 +130,7 @@ jobs:
         run: |
           sam deploy \
             --stack-name notes-backend-${{ steps.stage.outputs.stage }} \
+            --resolve-s3 \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --capabilities CAPABILITY_IAM \
