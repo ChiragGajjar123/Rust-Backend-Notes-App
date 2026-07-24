@@ -22,7 +22,6 @@ anyhow = "1.0"
 thiserror = "1.0"
 
 [profile.release]
-lto = true
 opt-level = 3
-codegen-units = 1
+codegen-units = 16
 panic = "abort"
