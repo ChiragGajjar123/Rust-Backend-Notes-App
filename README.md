@@ -1,8 +1,8 @@
-# Notes Rust Backend for Vercel
+# Notes Rust Backend
 
-Rust serverless implementation of the Notes API, backed by Neon/Postgres with JWT and bcrypt auth.
+High-performance Rust web API built with Axum, Tokio, and SQLx, backed by PostgreSQL (or Neon) with JWT authentication and bcrypt password hashing.
 
-The HTTP contract matches the existing frontend API:
+## API Endpoints
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -14,44 +14,25 @@ The HTTP contract matches the existing frontend API:
 | `PUT` | `/api/notes/{id}` | Bearer | Update note |
 | `DELETE` | `/api/notes/{id}` | Bearer | Delete note |
 
-## Vercel Structure
-
-- `api/index.rs` is the Vercel Rust function entrypoint.
-- `src/lib.rs` contains the shared API/router/database/auth code.
-- `vercel.json` rewrites `/api/*` requests into the single Rust function.
-- `Cargo.toml` is the only Cargo manifest.
-
 ## Environment Variables
 
-Set these in the Vercel dashboard:
+Configure these in `.env`:
 
 ```env
+PORT=8080
 DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require
 JWT_SECRET=change-me-to-a-long-random-secret
 JWT_EXPIRATION_MS=86400000
-CORS_ALLOWED_ORIGIN=https://your-frontend-domain.example
+CORS_ALLOWED_ORIGIN=http://localhost:5173
 ```
 
-`DATABASE_URL` may also be provided as `NEON_DATABASE_URL`. Tables and indexes are created automatically on cold start if they do not exist.
-
-## Deploy
+## Running Locally
 
 ```powershell
-vercel deploy --prod
+cargo run
 ```
 
-For local Vercel development:
+## Database Migrations
 
-```powershell
-vercel dev
-```
+Migrations are stored in `migrations/` and executed automatically when the backend starts up.
 
-Point the frontend at:
-
-```env
-VITE_API_URL=https://your-vercel-app.vercel.app/api
-```
-
-## Database
-
-The schema is kept in `schema.sql` for reference and manual setup. The function also runs the same schema creation during initialization.

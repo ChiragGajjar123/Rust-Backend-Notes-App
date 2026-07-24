@@ -1,16 +1,17 @@
--- Notes App schema for Neon Postgres
--- Applied automatically on server startup; this file is for reference / manual setup.
-
+-- Create extensions
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- Create users table
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     username VARCHAR(100) NOT NULL UNIQUE,
-    email VARCHAR(50) NOT NULL UNIQUE,
-    password VARCHAR(120) NOT NULL,
-    theme VARCHAR(10) NOT NULL DEFAULT 'light'
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    theme VARCHAR(10) NOT NULL DEFAULT 'light',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Create notes table
 CREATE TABLE IF NOT EXISTS notes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -23,6 +24,6 @@ CREATE TABLE IF NOT EXISTS notes (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Create indexes
 CREATE INDEX IF NOT EXISTS idx_notes_user_id ON notes(user_id);
-CREATE INDEX IF NOT EXISTS idx_notes_user_pinned_updated
-    ON notes(user_id, pinned DESC, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notes_user_pinned_updated ON notes(user_id, pinned DESC, updated_at DESC);
