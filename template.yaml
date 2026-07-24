@@ -1,0 +1,165 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Notes App Backend — Rust Lambda with API Gateway HTTP API (Free Tier).
+
+# ─── Parameters ─────────────────────────────────────────────────────────────
+Parameters:
+  Stage:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+
+  DatabaseUrl:
+    Type: String
+    NoEcho: true
+    Description: PostgreSQL connection string
+
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+
+  JwtExpirationMs:
+    Type: String
+    Default: '86400000'
+
+  CorsAllowedOrigins:
+    Type: String
+    Default: '*'
+
+  MaxDbConnections:
+    Type: String
+    Default: '5'
+
+  BcryptCost:
+    Type: String
+    Default: '10'
+
+  # VPC is OPTIONAL — leave empty for free-tier (no VPC)
+  VpcSubnetIds:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: (Optional) Private subnet IDs — leave empty for free tier
+
+  VpcSecurityGroupIds:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: (Optional) Security group IDs — leave empty for free tier
+
+  ProvisionedConcurrency:
+    Type: Number
+    Default: 0
+    Description: Set to 0 for free tier
+
+  ReservedConcurrency:
+    Type: Number
+    Default: 10
+    MinValue: 1
+
+# ─── Conditions ─────────────────────────────────────────────────────────────
+Conditions:
+  HasVpcConfig:
+    !Not [!Equals [!Select [0, !Ref VpcSubnetIds], '']]
+  HasProvisionedConcurrency:
+    !Not [!Equals [!Ref ProvisionedConcurrency, 0]]
+
+# ─── Globals ────────────────────────────────────────────────────────────────
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: provided.al2023
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        RUST_LOG: info,tower_http=info
+
+# ─── Resources ──────────────────────────────────────────────────────────────
+Resources:
+
+  # ── HTTP API Gateway (Free: 1M requests/month for 12 months) ───────────
+  NotesHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+      Description: Notes App HTTP API
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref CorsAllowedOrigins
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - Authorization
+          - Content-Type
+          - Accept
+        MaxAge: 3600
+
+  # ── Lambda Function (Free: 1M requests + 400K GB-sec/month) ───────────
+  NotesBackendFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: notes_backend
+        CargoFeatures:
+          - lambda
+        DefaultFeatures: false
+    Properties:
+      FunctionName: !Sub notes-backend-${Stage}
+      CodeUri: .
+      Handler: bootstrap
+      Description: Notes App Rust Backend
+      ReservedConcurrentExecutions: !Ref ReservedConcurrency
+      AutoPublishAlias: live
+      # Provisioned Concurrency — only if > 0 (costs money, skip for free tier)
+      ProvisionedConcurrencyConfig:
+        !If
+          - HasProvisionedConcurrency
+          - ProvisionedConcurrentExecutions: !Ref ProvisionedConcurrency
+          - !Ref AWS::NoValue
+      # VPC — only if subnet IDs provided (skip for free tier)
+      VpcConfig:
+        !If
+          - HasVpcConfig
+          - SubnetIds: !Ref VpcSubnetIds
+            SecurityGroupIds: !Ref VpcSecurityGroupIds
+          - !Ref AWS::NoValue
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref DatabaseUrl
+          JWT_SECRET: !Ref JwtSecret
+          JWT_EXPIRATION_MS: !Ref JwtExpirationMs
+          CORS_ALLOWED_ORIGINS: !Ref CorsAllowedOrigins
+          MAX_CONNECTIONS: !Ref MaxDbConnections
+          BCRYPT_COST: !Ref BcryptCost
+      Policies:
+        - CloudWatchLogsFullAccess
+      Events:
+        ProxyRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref NotesHttpApi
+            Path: /{proxy+}
+            Method: ANY
+        RootRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref NotesHttpApi
+            Path: /
+            Method: ANY
+
+# ─── Outputs ────────────────────────────────────────────────────────────────
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${NotesHttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}
+
+  FunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt NotesBackendFunction.Arn

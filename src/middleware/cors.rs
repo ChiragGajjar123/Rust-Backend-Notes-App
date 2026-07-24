@@ -2,6 +2,7 @@ use crate::config::Config;
 use axum::http::{HeaderValue, Method};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+#[cfg_attr(feature = "lambda", allow(dead_code))]
 pub fn build_cors_layer(config: &Config) -> CorsLayer {
     if config.cors_allowed_origins.contains(&"*".to_string()) {
         CorsLayer::new()

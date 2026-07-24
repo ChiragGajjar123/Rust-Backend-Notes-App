@@ -5,8 +5,11 @@ pub struct Config {
     pub database_url: String,
     pub jwt_secret: String,
     pub jwt_expiration_ms: i64,
+    #[cfg_attr(feature = "lambda", allow(dead_code))]
     pub cors_allowed_origins: Vec<String>,
+    #[cfg_attr(feature = "lambda", allow(dead_code))]
     pub server_host: String,
+    #[cfg_attr(feature = "lambda", allow(dead_code))]
     pub server_port: u16,
     pub bcrypt_cost: u32,
     pub max_connections: u32,

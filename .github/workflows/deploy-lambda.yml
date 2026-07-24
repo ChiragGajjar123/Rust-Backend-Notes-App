@@ -1,0 +1,167 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# GitHub Actions — CI/CD Pipeline for Notes App Backend (AWS Lambda)
+#
+# Triggers:
+#   • Push to main/master  → Build, test, and deploy to production Lambda
+#   • Push to staging       → Build, test, and deploy to staging Lambda
+#   • Pull requests         → Build and test only (no deploy)
+#
+# Required GitHub Secrets (mandatory):
+#   AWS_ACCESS_KEY_ID           — IAM user access key
+#   AWS_SECRET_ACCESS_KEY       — IAM user secret key
+#   AWS_REGION                  — e.g., ap-south-1
+#   DATABASE_URL                — PostgreSQL connection string
+#   JWT_SECRET                  — JWT signing secret (min 32 characters)
+#
+# Optional GitHub Secrets:
+#   CORS_ALLOWED_ORIGINS        — Frontend origins (default: *)
+#   VPC_SUBNET_IDS              — Only if using VPC (not needed for free tier)
+#   VPC_SECURITY_GROUP_IDS      — Only if using VPC (not needed for free tier)
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Deploy to AWS Lambda
+
+on:
+  push:
+    branches: [main, master, staging]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  SAM_CLI_TELEMETRY: 0
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Job 1: Lint & Type Check ──────────────────────────────────────────
+  check:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Check (standalone)
+        run: cargo check
+
+      - name: Check (lambda)
+        run: cargo check --features lambda --no-default-features
+
+      - name: Clippy (standalone)
+        run: cargo clippy -- -D warnings
+
+      - name: Clippy (lambda)
+        run: cargo clippy --features lambda --no-default-features -- -D warnings
+
+  # ── Job 2: Build & Deploy ─────────────────────────────────────────────
+  deploy:
+    name: Build & Deploy to Lambda
+    needs: check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-lambda
+        run: pip3 install cargo-lambda
+
+      - name: Install SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-lambda-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-lambda-
+
+      - name: Set deployment stage
+        id: stage
+        run: |
+          if [[ "${{ github.ref_name }}" == "staging" ]]; then
+            echo "stage=staging" >> $GITHUB_OUTPUT
+          else
+            echo "stage=prod" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Lambda binary
+        run: cargo lambda build --release --features lambda --no-default-features
+
+      - name: SAM Build
+        run: sam build --beta-features
+
+      - name: SAM Deploy
+        run: |
+          sam deploy \
+            --stack-name notes-backend-${{ steps.stage.outputs.stage }} \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides \
+              "Stage=${{ steps.stage.outputs.stage }}" \
+              "DatabaseUrl=${{ secrets.DATABASE_URL }}" \
+              "JwtSecret=${{ secrets.JWT_SECRET }}" \
+              "CorsAllowedOrigins=${{ secrets.CORS_ALLOWED_ORIGINS || '*' }}" \
+              "MaxDbConnections=5" \
+              "JwtExpirationMs=86400000" \
+              "BcryptCost=10" \
+              "ProvisionedConcurrency=0" \
+              "ReservedConcurrency=10"
+
+      - name: Get API Endpoint
+        id: endpoint
+        run: |
+          ENDPOINT=$(aws cloudformation describe-stacks \
+            --stack-name notes-backend-${{ steps.stage.outputs.stage }} \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+            --output text)
+          echo "url=$ENDPOINT" >> $GITHUB_OUTPUT
+          echo "## 🚀 Deployed API Endpoint" >> $GITHUB_STEP_SUMMARY
+          echo "**Stage:** ${{ steps.stage.outputs.stage }}" >> $GITHUB_STEP_SUMMARY
+          echo "**URL:** $ENDPOINT" >> $GITHUB_STEP_SUMMARY
+
+      - name: Health Check
+        run: |
+          echo "Testing: ${{ steps.endpoint.outputs.url }}/health"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ steps.endpoint.outputs.url }}/health")
+          if [ "$STATUS" -ne 200 ]; then
+            echo "❌ Health check failed with status $STATUS"
+            exit 1
+          fi
+          echo "✅ Health check passed (HTTP $STATUS)"
