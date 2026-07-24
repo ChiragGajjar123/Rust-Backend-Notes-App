@@ -24,13 +24,14 @@ async fn build_app() -> anyhow::Result<axum::Router> {
     // Load .env file in local development if present
     dotenvy::dotenv().ok();
 
-    // Initialize structured logging / tracing
+    // Initialize structured logging / tracing (try_init prevents panics in Lambda runtime)
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
             std::env::var("RUST_LOG").unwrap_or_else(|_| "info,tower_http=info".into()),
         ))
         .with(tracing_subscriber::fmt::layer())
-        .init();
+        .try_init()
+        .ok();
 
     tracing::info!("Starting Notes App Backend...");
 

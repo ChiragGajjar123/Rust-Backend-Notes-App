@@ -5,7 +5,9 @@ use axum::{
 };
 
 pub fn health_routes() -> Router<AppState> {
-    Router::new().route("/health", get(crate::handlers::health::health_check))
+    Router::new()
+        .route("/", get(crate::handlers::health::health_check))
+        .route("/health", get(crate::handlers::health::health_check))
 }
 
 pub fn auth_routes() -> Router<AppState> {

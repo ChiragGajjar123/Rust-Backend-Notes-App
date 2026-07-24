@@ -78,7 +78,7 @@ Resources:
   NotesHttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
-      StageName: !Ref Stage
+      StageName: '$default'
       Description: Notes App HTTP API
       CorsConfiguration:
         AllowOrigins:
@@ -152,7 +152,7 @@ Resources:
 Outputs:
   ApiEndpoint:
     Description: API Gateway endpoint URL
-    Value: !Sub https://${NotesHttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}
+    Value: !Sub https://${NotesHttpApi}.execute-api.${AWS::Region}.amazonaws.com
 
   FunctionArn:
     Description: Lambda function ARN
