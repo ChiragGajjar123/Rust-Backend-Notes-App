@@ -110,10 +110,28 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(feature = "lambda")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    use lambda_http::tower::ServiceExt;
+
     let app = build_app().await?;
 
     tracing::info!("🚀 Lambda handler ready — awaiting API Gateway events.");
-    lambda_http::run(app).await.map_err(|e| anyhow::anyhow!("Lambda runtime error: {}", e))?;
+
+    lambda_http::run(lambda_http::tower::service_fn(move |req: lambda_http::Request| {
+        let app = app.clone();
+        async move {
+            let (parts, body) = req.into_parts();
+            let axum_body = match body {
+                lambda_http::Body::Empty => axum::body::Body::empty(),
+                lambda_http::Body::Text(text) => axum::body::Body::from(text),
+                lambda_http::Body::Binary(bytes) => axum::body::Body::from(bytes),
+            };
+            let axum_req = axum::http::Request::from_parts(parts, axum_body);
+            let response = app.oneshot(axum_req).await.map_err(|e| e.to_string())?;
+            Ok::<_, String>(response)
+        }
+    }))
+    .await
+    .map_err(|e| anyhow::anyhow!("Lambda runtime error: {}", e))?;
 
     Ok(())
 }
