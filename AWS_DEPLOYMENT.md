@@ -32,6 +32,7 @@ This guide details how to deploy your Notes App Rust backend natively on an **AW
    - Check **Allow SSH** (Port 22 from Anywhere).
    - Check **Allow HTTP** (Port 80).
    - Check **Allow HTTPS** (Port 443).
+   - Add Custom TCP Rule: Port `8080` (Source `0.0.0.0/0`).
 8. Click **Launch Instance**.
 
 ---
@@ -42,9 +43,8 @@ This guide details how to deploy your Notes App Rust backend natively on an **AW
 2. Copy and paste this single command into the EC2 terminal:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
-source $HOME/.cargo/env && \
-cd ~ && rm -rf app && git clone https://github.com/ChiragGajjar123/Rust-Backend-Notes-App.git app && \
+sudo apt update && sudo apt install -y cargo build-essential pkg-config libssl-dev git && \
+cd ~ && sudo rm -rf app && git clone https://github.com/ChiragGajjar123/Rust-Backend-Notes-App.git app && \
 cd app && \
 cargo build --release && \
 sudo cp target/release/notes_backend /usr/local/bin/notes_backend && \
@@ -56,7 +56,7 @@ After=network.target
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/home/ubuntu
+WorkingDirectory=/home/ubuntu/app
 ExecStart=/usr/local/bin/notes_backend
 Restart=always
 RestartSec=5
