@@ -8,7 +8,8 @@ mod routes;
 mod utils;
 
 use crate::config::Config;
-use crate::db::{create_pool, run_migrations};
+#[allow(unused_imports)]
+use crate::db::{create_pool, create_pool_lazy, run_migrations};
 use crate::middleware::auth::AppState;
 use crate::routes::all_routes;
 use std::sync::Arc;
@@ -41,15 +42,25 @@ async fn build_app() -> anyhow::Result<axum::Router> {
         config.max_connections
     );
 
-    // Initialize PostgreSQL connection pool
-    tracing::info!("Connecting to PostgreSQL database...");
-    let pool = create_pool(&config.database_url, config.max_connections).await?;
-    tracing::info!("Database pool created successfully.");
+    // In standalone mode, connect to database and run migrations on startup.
+    // In Lambda mode, use connect_lazy for instant 0ms cold-start initialization.
+    #[cfg(feature = "standalone")]
+    let pool = {
+        tracing::info!("Connecting to PostgreSQL database...");
+        let pool = create_pool(&config.database_url, config.max_connections).await?;
+        tracing::info!("Database pool created successfully.");
 
-    // Run embedded SQL database migrations automatically on startup
-    tracing::info!("Running database migrations...");
-    run_migrations(&pool).await?;
-    tracing::info!("Database migrations executed successfully.");
+        tracing::info!("Running database migrations...");
+        run_migrations(&pool).await?;
+        tracing::info!("Database migrations executed successfully.");
+        pool
+    };
+
+    #[cfg(feature = "lambda")]
+    let pool = {
+        tracing::info!("Initializing lazy PostgreSQL connection pool for Lambda...");
+        create_pool_lazy(&config.database_url, config.max_connections)?
+    };
 
     // Create shared application state
     let state = AppState::new(config.clone(), Arc::new(pool));
