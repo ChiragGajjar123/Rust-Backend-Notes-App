@@ -16,22 +16,28 @@ impl Config {
     pub fn from_env() -> Result<Self, String> {
         let database_url = env::var("DATABASE_URL")
             .or_else(|_| env::var("POSTGRES_URL"))
-            .map_err(|_| "DATABASE_URL or POSTGRES_URL must be set".to_string())?;
+            .map_err(|_| "DATABASE_URL or POSTGRES_URL environment variable must be set".to_string())?;
 
-        let jwt_secret = env::var("JWT_SECRET").map_err(|_| "JWT_SECRET must be set".to_string())?;
+        let jwt_secret = env::var("JWT_SECRET")
+            .map_err(|_| "JWT_SECRET environment variable must be set".to_string())?;
+
         let jwt_expiration_ms = env::var("JWT_EXPIRATION_MS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(86_400_000);
+            .unwrap_or(86_400_000); // Default to 24 hours
 
         let cors_allowed_origins = env::var("CORS_ALLOWED_ORIGINS")
             .unwrap_or_else(|_| "*".to_string())
             .split(',')
             .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
             .collect();
 
         let server_host = env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-        let server_port = env::var("SERVER_PORT")
+
+        // Render sets PORT dynamically in production
+        let server_port = env::var("PORT")
+            .or_else(|_| env::var("SERVER_PORT"))
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(3000);
@@ -44,7 +50,7 @@ impl Config {
         let max_connections = env::var("MAX_CONNECTIONS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(100);
+            .unwrap_or(50);
 
         Ok(Config {
             database_url,

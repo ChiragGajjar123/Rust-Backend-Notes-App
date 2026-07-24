@@ -1,9 +1,15 @@
-use bcrypt::{hash, verify, DEFAULT_COST};
+use crate::errors::AppError;
 
-pub fn hash_password(password: &str, cost: u32) -> Result<String, bcrypt::BcryptError> {
-    hash(password, cost)
+pub async fn hash_password(password: String, cost: u32) -> Result<String, AppError> {
+    tokio::task::spawn_blocking(move || {
+        bcrypt::hash(password, cost).map_err(AppError::PasswordError)
+    })
+    .await?
 }
 
-pub fn verify_password(password: &str, hash: &str) -> Result<bool, bcrypt::BcryptError> {
-    verify(password, hash)
+pub async fn verify_password(password: String, hash: String) -> Result<bool, AppError> {
+    tokio::task::spawn_blocking(move || {
+        bcrypt::verify(password, &hash).map_err(AppError::PasswordError)
+    })
+    .await?
 }

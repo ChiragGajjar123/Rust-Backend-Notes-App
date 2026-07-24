@@ -1,32 +1,35 @@
+use crate::middleware::auth::AppState;
 use axum::{
-    middleware,
     routing::{delete, get, post, put},
     Router,
 };
 
-pub fn auth_routes() -> Router<crate::middleware::auth::AppState> {
+pub fn health_routes() -> Router<AppState> {
+    Router::new().route("/health", get(crate::handlers::health::health_check))
+}
+
+pub fn auth_routes() -> Router<AppState> {
     Router::new()
         .route("/auth/login", post(crate::handlers::auth::login))
         .route("/auth/signup", post(crate::handlers::auth::signup))
+        .route("/auth/me", get(crate::handlers::auth::get_current_user))
 }
 
-pub fn notes_routes() -> Router<crate::middleware::auth::AppState> {
+pub fn notes_routes() -> Router<AppState> {
     Router::new()
         .route("/notes", get(crate::handlers::notes::list_notes))
         .route("/notes", post(crate::handlers::notes::create_note))
         .route("/notes/:id", put(crate::handlers::notes::update_note))
         .route("/notes/:id", delete(crate::handlers::notes::delete_note))
-        .layer(middleware::from_fn(crate::middleware::auth::auth_middleware))
 }
 
-pub fn user_routes() -> Router<crate::middleware::auth::AppState> {
-    Router::new()
-        .route("/users/theme", put(crate::handlers::users::update_theme))
-        .layer(middleware::from_fn(crate::middleware::auth::auth_middleware))
+pub fn user_routes() -> Router<AppState> {
+    Router::new().route("/users/theme", put(crate::handlers::users::update_theme))
 }
 
-pub fn all_routes() -> Router<crate::middleware::auth::AppState> {
+pub fn all_routes() -> Router<AppState> {
     Router::new()
+        .merge(health_routes())
         .merge(auth_routes())
         .merge(notes_routes())
         .merge(user_routes())

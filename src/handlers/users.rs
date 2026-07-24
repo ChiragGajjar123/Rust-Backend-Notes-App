@@ -1,25 +1,33 @@
+use crate::errors::AppError;
+use crate::middleware::auth::{AppState, AuthUser};
 use crate::models::{MessageResponse, ThemeRequest};
 use axum::{
     extract::State,
     http::StatusCode,
-    response::Json,
+    response::IntoResponse,
+    Json,
 };
 
 pub async fn update_theme(
-    State(state): State<crate::middleware::auth::AppState>,
-    crate::middleware::auth::AuthUser(user): crate::middleware::auth::AuthUser,
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
     Json(payload): Json<ThemeRequest>,
-) -> Result<impl axum::response::IntoResponse, StatusCode> {
-    if payload.theme != "light" && payload.theme != "dark" {
-        return Err(StatusCode::BAD_REQUEST);
+) -> Result<impl IntoResponse, AppError> {
+    let theme = payload.theme.trim().to_lowercase();
+    if theme != "light" && theme != "dark" {
+        return Err(AppError::BadRequest("Theme must be 'light' or 'dark'".to_string()));
     }
 
-    sqlx::query!("UPDATE users SET theme = $1 WHERE id = $2", payload.theme, user.id)
+    sqlx::query("UPDATE users SET theme = $1 WHERE id = $2")
+        .bind(theme)
+        .bind(user.id)
         .execute(state.pool.as_ref())
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?;
 
-    Ok((StatusCode::OK, Json(MessageResponse {
-        message: "Theme updated successfully".to_string(),
-    })))
+    Ok((
+        StatusCode::OK,
+        Json(MessageResponse {
+            message: "Theme updated successfully".to_string(),
+        }),
+    ))
 }
