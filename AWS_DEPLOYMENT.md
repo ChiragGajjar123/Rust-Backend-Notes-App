@@ -44,7 +44,7 @@ Restart=always
 RestartSec=5
 Environment="PORT=8080"
 Environment="SERVER_HOST=0.0.0.0"
-Environment="DATABASE_URL=postgresql://notesuser:NotesAppSecurePass123!@localhost:5432/notesdb"
+Environment="DATABASE_URL=postgresql://notesuser:NotesAppSecurePass123!@127.0.0.1:5432/notesdb"
 Environment="JWT_SECRET=secretKeyNotesAppJWTSecretTokenGeneratorCustomString1234567890!"
 Environment="JWT_EXPIRATION_MS=86400000"
 Environment="CORS_ALLOWED_ORIGINS=http://localhost:5173,https://angular-frontend-for-rust-backend-n.vercel.app"
