@@ -3,11 +3,6 @@ name = "notes_backend"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-default = ["standalone"]
-standalone = []      # Traditional long-running server (EC2, Docker)
-lambda = ["dep:lambda_http", "dep:lambda_runtime"]  # AWS Lambda deployment
-
 [dependencies]
 axum = { version = "0.7", features = ["macros", "multipart"] }
 axum-extra = { version = "0.9", features = ["cookie-private"] }
@@ -25,8 +20,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 dotenvy = "0.15"
 anyhow = "1.0"
 thiserror = "1.0"
-lambda_http = { version = "0.13", optional = true }
-lambda_runtime = { version = "0.13", optional = true }
+lambda_http = "0.13"
+lambda_runtime = "0.13"
 
 [profile.release]
 opt-level = 3

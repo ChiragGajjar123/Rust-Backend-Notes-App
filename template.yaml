@@ -102,9 +102,6 @@ Resources:
       BuildMethod: rust-cargolambda
       BuildProperties:
         Binary: notes_backend
-        CargoFeatures:
-          - lambda
-        DefaultFeatures: false
     Properties:
       FunctionName: !Sub notes-backend-${Stage}
       CodeUri: .

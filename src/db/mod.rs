@@ -3,7 +3,7 @@ use std::time::Duration;
 
 pub type DbPool = Pool<Postgres>;
 
-#[cfg_attr(feature = "lambda", allow(dead_code))]
+#[allow(dead_code)]
 pub async fn create_pool(database_url: &str, max_connections: u32) -> Result<DbPool, sqlx::Error> {
     PgPoolOptions::new()
         .max_connections(max_connections)
@@ -15,7 +15,6 @@ pub async fn create_pool(database_url: &str, max_connections: u32) -> Result<DbP
         .await
 }
 
-#[cfg_attr(feature = "standalone", allow(dead_code))]
 pub fn create_pool_lazy(database_url: &str, max_connections: u32) -> Result<DbPool, sqlx::Error> {
     PgPoolOptions::new()
         .max_connections(max_connections)
@@ -26,7 +25,7 @@ pub fn create_pool_lazy(database_url: &str, max_connections: u32) -> Result<DbPo
         .connect_lazy(database_url)
 }
 
-#[cfg_attr(feature = "lambda", allow(dead_code))]
+#[allow(dead_code)]
 pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {
     sqlx::migrate!("./migrations").run(pool).await?;
     Ok(())

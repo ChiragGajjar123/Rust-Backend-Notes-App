@@ -121,7 +121,7 @@ jobs:
           fi
 
       - name: Build Lambda binary
-        run: cargo lambda build --release --features lambda --no-default-features
+        run: cargo lambda build --release
 
       - name: SAM Build
         run: sam build --beta-features

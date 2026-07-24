@@ -8,19 +8,18 @@ mod routes;
 mod utils;
 
 use crate::config::Config;
-#[allow(unused_imports)]
-use crate::db::{create_pool, create_pool_lazy, run_migrations};
+use crate::db::create_pool_lazy;
 use crate::middleware::auth::AppState;
+use crate::middleware::cors::build_cors_layer;
 use crate::routes::all_routes;
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-/// Shared initialization: tracing, config, DB pool, migrations, and Axum router.
+/// Shared initialization: tracing, config, DB pool, and Axum router.
 ///
-/// Returns the fully assembled Axum `Router` ready to serve requests.
-/// This is used by both the standalone server and the Lambda entry point.
-async fn build_app() -> anyhow::Result<axum::Router> {
+/// Returns the fully assembled Axum `Router` and `Config`.
+async fn build_app() -> anyhow::Result<(axum::Router, Arc<Config>)> {
     // Load .env file in local development if present
     dotenvy::dotenv().ok();
 
@@ -43,95 +42,60 @@ async fn build_app() -> anyhow::Result<axum::Router> {
         config.max_connections
     );
 
-    // In standalone mode, connect to database and run migrations on startup.
-    // In Lambda mode, use connect_lazy for instant 0ms cold-start initialization.
-    #[cfg(feature = "standalone")]
-    let pool = {
-        tracing::info!("Connecting to PostgreSQL database...");
-        let pool = create_pool(&config.database_url, config.max_connections).await?;
-        tracing::info!("Database pool created successfully.");
-
-        tracing::info!("Running database migrations...");
-        run_migrations(&pool).await?;
-        tracing::info!("Database migrations executed successfully.");
-        pool
-    };
-
-    #[cfg(feature = "lambda")]
-    let pool = {
-        tracing::info!("Initializing lazy PostgreSQL connection pool for Lambda...");
-        create_pool_lazy(&config.database_url, config.max_connections)?
-    };
+    // Initialize lazy PostgreSQL connection pool for instant 0ms cold starts
+    tracing::info!("Initializing lazy PostgreSQL connection pool...");
+    let pool = create_pool_lazy(&config.database_url, config.max_connections)?;
 
     // Create shared application state
     let state = AppState::new(config.clone(), Arc::new(pool));
 
-    // Build application HTTP router with tracing
-    #[allow(unused_mut)]
-    let mut app = all_routes()
+    // Build application HTTP router with CORS & tracing middleware
+    let cors = build_cors_layer(&config);
+    let app = all_routes()
         .with_state(state)
+        .layer(cors)
         .layer(TraceLayer::new_for_http());
 
-    // In standalone mode, apply tower-http CORS middleware.
-    // In Lambda mode, CORS is handled at the API Gateway level (enterprise standard).
-    #[cfg(feature = "standalone")]
-    {
-        let cors = crate::middleware::cors::build_cors_layer(&config);
-        app = app.layer(cors);
-        tracing::info!("CORS middleware applied (standalone mode).");
-    }
-
-    #[cfg(feature = "lambda")]
-    {
-        tracing::info!("Running in Lambda mode — CORS handled by API Gateway.");
-    }
-
-    Ok(app)
+    Ok((app, config))
 }
 
-// ─── Standalone entry point (EC2 / Docker / local dev) ──────────────────────
-#[cfg(feature = "standalone")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let app = build_app().await?;
+    let (app, config) = build_app().await?;
 
-    let config = Arc::new(Config::from_env().map_err(|e| anyhow::anyhow!(e))?);
-    let addr: std::net::SocketAddr =
-        format!("{}:{}", config.server_host, config.server_port).parse()?;
-    tracing::info!("🚀 Server running on http://{}", addr);
+    // Dynamically detect runtime execution environment:
+    // AWS Lambda automatically injects AWS_LAMBDA_RUNTIME_API into the container environment.
+    if std::env::var("AWS_LAMBDA_RUNTIME_API").is_ok() {
+        use lambda_http::tower::ServiceExt;
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+        tracing::info!("🚀 Running in AWS Lambda mode — awaiting API Gateway events.");
 
-    Ok(())
-}
+        lambda_http::run(lambda_http::tower::service_fn(move |req: lambda_http::Request| {
+            let app = app.clone();
+            async move {
+                let (parts, body) = req.into_parts();
+                let axum_body = match body {
+                    lambda_http::Body::Empty => axum::body::Body::empty(),
+                    lambda_http::Body::Text(text) => axum::body::Body::from(text),
+                    lambda_http::Body::Binary(bytes) => axum::body::Body::from(bytes),
+                };
+                let axum_req = axum::http::Request::from_parts(parts, axum_body);
+                let response = app.oneshot(axum_req).await.map_err(|e| e.to_string())?;
+                Ok::<_, String>(response)
+            }
+        }))
+        .await
+        .map_err(|e| anyhow::anyhow!("Lambda runtime error: {}", e))?;
+    } else {
+        tracing::info!("🚀 Running in Standalone mode — binding listener.");
 
-// ─── Lambda entry point (API Gateway + Lambda) ─────────────────────────────
-#[cfg(feature = "lambda")]
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    use lambda_http::tower::ServiceExt;
+        let addr: std::net::SocketAddr =
+            format!("{}:{}", config.server_host, config.server_port).parse()?;
+        tracing::info!("🚀 Server running on http://{}", addr);
 
-    let app = build_app().await?;
-
-    tracing::info!("🚀 Lambda handler ready — awaiting API Gateway events.");
-
-    lambda_http::run(lambda_http::tower::service_fn(move |req: lambda_http::Request| {
-        let app = app.clone();
-        async move {
-            let (parts, body) = req.into_parts();
-            let axum_body = match body {
-                lambda_http::Body::Empty => axum::body::Body::empty(),
-                lambda_http::Body::Text(text) => axum::body::Body::from(text),
-                lambda_http::Body::Binary(bytes) => axum::body::Body::from(bytes),
-            };
-            let axum_req = axum::http::Request::from_parts(parts, axum_body);
-            let response = app.oneshot(axum_req).await.map_err(|e| e.to_string())?;
-            Ok::<_, String>(response)
-        }
-    }))
-    .await
-    .map_err(|e| anyhow::anyhow!("Lambda runtime error: {}", e))?;
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        axum::serve(listener, app).await?;
+    }
 
     Ok(())
 }
