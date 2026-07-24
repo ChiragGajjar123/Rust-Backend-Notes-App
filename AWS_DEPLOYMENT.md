@@ -19,7 +19,7 @@ Run this single command on your EC2 terminal:
 
 ```bash
 sudo apt update && sudo apt install -y postgresql postgresql-contrib && \
-sudo -u postgres psql -c "CREATE USER notesuser WITH PASSWORD 'NotesAppSecurePass123!';" && \
+sudo -u postgres psql -c "CREATE USER notesuser WITH PASSWORD 'NotesAppSecurePass123';" && \
 sudo -u postgres psql -c "CREATE DATABASE notesdb OWNER notesuser;" && \
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE notesdb TO notesuser;" && \
 sudo -u postgres psql -d notesdb -c "GRANT ALL ON SCHEMA public TO notesuser;"
@@ -44,7 +44,7 @@ Restart=always
 RestartSec=5
 Environment="PORT=8080"
 Environment="SERVER_HOST=0.0.0.0"
-Environment="DATABASE_URL=postgresql://notesuser:NotesAppSecurePass123!@127.0.0.1:5432/notesdb"
+Environment="DATABASE_URL=postgresql://notesuser:NotesAppSecurePass123@127.0.0.1:5432/notesdb"
 Environment="JWT_SECRET=secretKeyNotesAppJWTSecretTokenGeneratorCustomString1234567890!"
 Environment="JWT_EXPIRATION_MS=86400000"
 Environment="CORS_ALLOWED_ORIGINS=http://localhost:5173,https://angular-frontend-for-rust-backend-n.vercel.app"
