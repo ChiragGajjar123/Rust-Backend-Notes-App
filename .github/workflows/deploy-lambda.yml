@@ -126,6 +126,17 @@ jobs:
       - name: SAM Build
         run: sam build --beta-features
 
+      - name: Clean up failed stack if needed
+        run: |
+          STATUS=$(aws cloudformation describe-stacks --stack-name notes-backend-${{ steps.stage.outputs.stage }} --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
+          echo "Current stack status: $STATUS"
+          if [ "$STATUS" == "ROLLBACK_COMPLETE" ]; then
+            echo "Deleting failed stack notes-backend-${{ steps.stage.outputs.stage }}..."
+            aws cloudformation delete-stack --stack-name notes-backend-${{ steps.stage.outputs.stage }}
+            aws cloudformation wait stack-delete-complete --stack-name notes-backend-${{ steps.stage.outputs.stage }}
+            echo "Failed stack deleted successfully."
+          fi
+
       - name: SAM Deploy
         run: |
           sam deploy \

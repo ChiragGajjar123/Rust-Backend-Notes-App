@@ -52,11 +52,6 @@ Parameters:
     Default: 0
     Description: Set to 0 for free tier
 
-  ReservedConcurrency:
-    Type: Number
-    Default: 10
-    MinValue: 1
-
 # ─── Conditions ─────────────────────────────────────────────────────────────
 Conditions:
   HasVpcConfig:
