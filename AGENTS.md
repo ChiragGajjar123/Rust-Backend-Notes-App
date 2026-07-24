@@ -14,7 +14,7 @@ This document provides context, instructions, and coding standards for AI models
 - **Database:** PostgreSQL (via SQLx 0.8) with runtime migrations
 - **Authentication:** JWT (`jsonwebtoken`) + Bcrypt password hashing (`bcrypt`)
 - **JSON Serialization:** Serde
-- **Architecture Type:** Standalone long-running HTTP Web Server (Deployed on AWS EC2 / Docker)
+- **Architecture Type:** Standalone long-running HTTP Web Server (Deployed natively on AWS EC2 via Systemd)
 
 ---
 
@@ -26,20 +26,18 @@ This document provides context, instructions, and coding standards for AI models
 ├── Cargo.lock          # Dependency lockfile
 ├── .env.example        # Example environment variables template
 ├── README.md           # General project overview
-├── DEPLOYMENT.md       # Step-by-step AWS EC2 & Docker deployment guide
+├── DEPLOYMENT.md       # AWS EC2 Systemd deployment summary
+├── AWS_DEPLOYMENT.md   # Step-by-step native AWS EC2 deployment guide
 ├── AGENTS.md           # Guidelines for AI coding agents
 ├── migrations/         # SQLx PostgreSQL migration files
 └── src/
     ├── main.rs         # Entry point: tracing, config, DB pool, router, server bind
-    ├── config.rs       # Environment variable config parser
-    ├── db.rs           # Database connection pool setup & migration runner
-    ├── models.rs       # Data structures, database entities & API request/response DTOs
-    ├── routes.rs       # Router definition and route mapping
-    ├── config/         # Modular config components
-    ├── db/             # Database connection & query modules
-    ├── handlers/       # HTTP request handlers (auth, notes, user theme)
+    ├── config/         # Modular config parser
+    ├── db/             # Database connection & migration module
+    ├── errors.rs       # Centralized AppError handling
+    ├── handlers/       # HTTP request handlers (auth, notes, users, health)
     ├── middleware/     # Custom Axum extractors (AuthUser authentication state)
-    ├── models/         # Entity models
+    ├── models/         # Entity models & DTOs
     ├── routes/         # Modular API router groups
     └── utils/          # Password hashing, JWT token utilities
 ```
@@ -64,12 +62,6 @@ cargo clippy
 cargo build --release
 ```
 
-### SQLx Offline Mode (Before Container Builds)
-```powershell
-cargo install sqlx-cli
-cargo sqlx prepare
-```
-
 ---
 
 ## 🔑 Environment Configuration
@@ -82,8 +74,8 @@ Required keys in `.env` for local and production execution:
 | `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/dbname?sslmode=require` |
 | `JWT_SECRET` | Secret key for signing JWT tokens | `min_32_character_random_string` |
 | `JWT_EXPIRATION_MS` | JWT token TTL in milliseconds | `86400000` (24 hours) |
-| `CORS_ALLOWED_ORIGIN`| Allowed CORS origin for frontend | `http://localhost:5173` |
-| `RUST_LOG` | Tracing filter level | `info,tower_http=debug` |
+| `CORS_ALLOWED_ORIGINS`| Allowed CORS origins for frontend | `http://localhost:5173,https://angular-frontend-for-rust-backend-n.vercel.app` |
+| `RUST_LOG` | Tracing filter level | `info,tower_http=info` |
 
 ---
 
@@ -91,19 +83,19 @@ Required keys in `.env` for local and production execution:
 
 1. **Async & Axum Patterns:**
    - Use Axum extractors (`State`, `Path`, `Json`, `AuthUser`) for route handlers.
-   - Handlers should return `Result<impl IntoResponse, StatusCode>` or structured JSON error responses.
+   - Handlers should return `Result<impl IntoResponse, AppError>`.
 
 2. **Database Queries:**
-   - Use SQLx parameterized queries (`sqlx::query!`, `sqlx::query_as!`) to prevent SQL injection and enable compile-time type verification.
+   - Use SQLx parameterized queries (`sqlx::query_as::<_, T>`, `sqlx::query`) with `.bind(...)` to prevent SQL injection and enable clean offline compilation.
    - Never write dynamic raw string concatenations for database queries.
 
 3. **Error Handling:**
-   - Prefer returning explicit HTTP status codes (`StatusCode::BAD_REQUEST`, `StatusCode::UNAUTHORIZED`, `StatusCode::INTERNAL_SERVER_ERROR`).
-   - Log detailed internal errors using `tracing::error!` before converting them to client-facing HTTP responses.
+   - Use central `AppError` type with structured JSON response `{ "error": "..." }`.
+   - Log detailed internal errors using `tracing::error!`.
 
 4. **Security & Authentication:**
-   - Passwords must always be hashed with `bcrypt` before storage.
-   - Protected routes must extract user identity using the `AuthUser` extractor from `src/middleware/auth.rs`.
+   - Passwords must always be hashed with `bcrypt` offloaded via `tokio::task::spawn_blocking`.
+   - Protected routes must extract user identity using `AuthUser` extractor.
 
 ---
 

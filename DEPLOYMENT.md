@@ -1,33 +1,25 @@
-# Deployment Overview - Notes App Rust Backend
+# Deployment Guide - Pure Rust Notes App Backend
 
-This directory contains the source code and configuration for deploying the Notes Application pure Rust backend to **Amazon Web Services (AWS)**.
+This repository contains a high-performance RESTful API written in **pure Rust** (Axum 0.7 + Tokio 1.38 + SQLx 0.8), designed for **native deployment on AWS EC2** as a lightweight **Systemd background service**.
 
 ---
 
 ## 📌 Quick Reference
 
-| Resource | File Link | Description |
-| :--- | :--- | :--- |
-| **AWS Deployment Guide** | [AWS_DEPLOYMENT.md](file:///d:/Rust/Notes%20App/Rust%20backend/AWS_DEPLOYMENT.md) | Full guide for AWS App Runner, AWS EC2, ECR, and RDS |
-| **App Runner Manifest** | [apprunner.yaml](file:///d:/Rust/Notes%20App/Rust%20backend/apprunner.yaml) | Configuration manifest for 1-click AWS App Runner deployments |
-| **Multi-Stage Dockerfile** | [Dockerfile](file:///d:/Rust/Notes%20App/Rust%20backend/Dockerfile) | Production Docker image build file |
-| **Environment Template** | [.env.example](file:///d:/Rust/Notes%20App/Rust%20backend/.env.example) | Environment variables template |
+| File | Description |
+| :--- | :--- |
+| [AWS_DEPLOYMENT.md](file:///d:/Rust/Notes%20App/Rust%20backend/AWS_DEPLOYMENT.md) | Step-by-step Native AWS EC2 Systemd deployment guide |
+| [.env.example](file:///d:/Rust/Notes%20App/Rust%20backend/.env.example) | Environment variables template |
 
 ---
 
-## 🚀 Quick Deployment Summary
+## ⚡ Native EC2 Systemd Deployment (No Docker)
 
-### 1. AWS App Runner (Container Service)
-1. Push Docker image to AWS ECR using `Dockerfile`.
-2. Provision App Runner service pointing to your ECR image using `apprunner.yaml`.
-3. Set environment variables (`DATABASE_URL`, `JWT_SECRET`, `PORT=8080`).
+```bash
+# Build & deploy as systemd service on Ubuntu EC2:
+cargo build --release
+sudo cp target/release/notes_backend /usr/local/bin/notes_backend
+sudo systemctl enable --now notes-backend
+```
 
-### 2. AWS EC2 (Docker or Systemd Service)
-1. Launch Ubuntu/Debian EC2 instance (`t3.small` or `t3.medium`).
-2. Run via Docker (`docker run -d -p 8080:8080 ...`) OR compile release binary (`cargo build --release`) and manage with `systemd`.
-
----
-
-## 🔍 Verification Endpoint
-
-- `GET /health` -> `{"status": "ok", "service": "notes-backend"}`
+See [AWS_DEPLOYMENT.md](file:///d:/Rust/Notes%20App/Rust%20backend/AWS_DEPLOYMENT.md) for full instructions and automated script.
