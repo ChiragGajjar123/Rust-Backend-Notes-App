@@ -140,8 +140,15 @@ Resources:
           MAX_CONNECTIONS: !Ref MaxDbConnections
           BCRYPT_COST: !Ref BcryptCost
       Policies:
-        - CloudWatchLogsFullAccess
-        - AmazonSESFullAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: "*"
       Events:
         ProxyRoute:
           Type: HttpApi
