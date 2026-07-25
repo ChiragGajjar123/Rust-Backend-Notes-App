@@ -144,6 +144,8 @@ jobs:
               "DatabaseUrl=${{ secrets.DATABASE_URL }}" \
               "JwtSecret=${{ secrets.JWT_SECRET }}" \
               "CorsAllowedOrigins=${{ secrets.CORS_ALLOWED_ORIGINS || '*' }}" \
+              "AwsRegionParam=${{ secrets.AWS_REGION || 'ap-south-1' }}" \
+              "AwsSesFromEmail=${{ secrets.AWS_SES_FROM_EMAIL }}" \
               "MaxDbConnections=5" \
               "JwtExpirationMs=86400000" \
               "BcryptCost=10" \

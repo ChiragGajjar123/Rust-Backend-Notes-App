@@ -36,6 +36,14 @@ Parameters:
     Type: String
     Default: '10'
 
+  AwsRegionParam:
+    Type: String
+    Default: ap-south-1
+
+  AwsSesFromEmail:
+    Type: String
+    Default: ''
+
   # VPC is OPTIONAL — leave empty for free-tier (no VPC)
   VpcSubnetIds:
     Type: CommaDelimitedList
@@ -123,6 +131,8 @@ Resources:
           - !Ref AWS::NoValue
       Environment:
         Variables:
+          AWS_REGION: !Ref AwsRegionParam
+          AWS_SES_FROM_EMAIL: !Ref AwsSesFromEmail
           DATABASE_URL: !Ref DatabaseUrl
           JWT_SECRET: !Ref JwtSecret
           JWT_EXPIRATION_MS: !Ref JwtExpirationMs
@@ -131,6 +141,7 @@ Resources:
           BCRYPT_COST: !Ref BcryptCost
       Policies:
         - CloudWatchLogsFullAccess
+        - AmazonSESFullAccess
       Events:
         ProxyRoute:
           Type: HttpApi
