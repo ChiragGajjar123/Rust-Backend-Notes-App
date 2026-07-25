@@ -125,23 +125,36 @@ pub async fn forgot_password(
         return Err(AppError::BadRequest("Invalid email address".to_string()));
     }
 
-    // 1. Check if user exists
+    // 1. Ensure password_resets table and index exist in database
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS password_resets (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            email VARCHAR(255) NOT NULL,
+            otp_hash VARCHAR(255) NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            expires_at TIMESTAMPTZ NOT NULL,
+            used BOOLEAN NOT NULL DEFAULT FALSE
+        );
+        CREATE INDEX IF NOT EXISTS idx_password_resets_email_created ON password_resets(email, created_at DESC);
+        "#,
+    )
+    .execute(state.pool.as_ref())
+    .await?;
+
+    // 2. Check if account exists with this email address
     let user_exists = sqlx::query("SELECT id FROM users WHERE email = $1")
         .bind(email)
         .fetch_optional(state.pool.as_ref())
         .await?;
 
     if user_exists.is_none() {
-        // Return standard response to prevent user enumeration
-        return Ok((
-            StatusCode::OK,
-            Json(MessageResponse {
-                message: "If an account with that email exists, a password reset code has been sent.".to_string(),
-            }),
+        return Err(AppError::NotFound(
+            "No account found with this email address. Please check your email or sign up.".to_string(),
         ));
     }
 
-    // 2. Time interval rate limiting check
+    // 3. Time interval rate limiting check
     let last_reset = sqlx::query_as::<_, PasswordReset>(
         "SELECT id, email, otp_hash, created_at, expires_at, used FROM password_resets WHERE email = $1 ORDER BY created_at DESC LIMIT 1",
     )
@@ -161,15 +174,15 @@ pub async fn forgot_password(
         }
     }
 
-    // 3. Generate 6-digit OTP code
+    // 4. Generate 6-digit OTP code
     let otp_code: u32 = rand::thread_rng().gen_range(100000..=999999);
     let otp_str = otp_code.to_string();
 
-    // 4. Hash OTP code for storage
+    // 5. Hash OTP code for storage
     let otp_hash = hash_password(otp_str.clone(), state.config.bcrypt_cost).await?;
     let expires_at = chrono::Utc::now() + chrono::Duration::minutes(state.config.password_reset_expiration_mins);
 
-    // 5. Store OTP record in database
+    // 6. Store OTP record in database
     sqlx::query(
         "INSERT INTO password_resets (email, otp_hash, expires_at) VALUES ($1, $2, $3)",
     )
@@ -179,13 +192,13 @@ pub async fn forgot_password(
     .execute(state.pool.as_ref())
     .await?;
 
-    // 6. Dispatch AWS SES email
+    // 7. Dispatch AWS SES email
     send_password_reset_email(email, &otp_str, &state.config).await?;
 
     Ok((
         StatusCode::OK,
         Json(MessageResponse {
-            message: "If an account with that email exists, a password reset code has been sent.".to_string(),
+            message: "A 6-digit password reset code has been sent to your email.".to_string(),
         }),
     ))
 }
