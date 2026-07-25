@@ -20,6 +20,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 dotenvy = "0.15"
 anyhow = "1.0"
 thiserror = "1.0"
+aws-config = "1.5"
+aws-sdk-sesv2 = "1.50"
+rand = "0.8"
 lambda_http = "0.13"
 lambda_runtime = "0.13"
 

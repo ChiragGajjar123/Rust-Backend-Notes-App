@@ -1,6 +1,10 @@
 use crate::errors::AppError;
 use crate::middleware::auth::{AppState, AuthUser};
-use crate::models::{AuthResponse, LoginRequest, SignupRequest, User, UserResponse};
+use crate::models::{
+    AuthResponse, ForgotPasswordRequest, LoginRequest, MessageResponse, PasswordReset,
+    ResetPasswordRequest, SignupRequest, User, UserResponse, VerifyResetCodeRequest,
+};
+use crate::utils::aws_email::send_password_reset_email;
 use crate::utils::jwt::generate_jwt;
 use crate::utils::password::{hash_password, verify_password};
 use axum::{
@@ -9,6 +13,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use rand::Rng;
 
 pub async fn login(
     State(state): State<AppState>,
@@ -108,4 +113,161 @@ pub async fn get_current_user(
     AuthUser(user): AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
     Ok((StatusCode::OK, Json(UserResponse::from(user))))
+}
+
+#[axum::debug_handler]
+pub async fn forgot_password(
+    State(state): State<AppState>,
+    Json(payload): Json<ForgotPasswordRequest>,
+) -> Result<(StatusCode, Json<MessageResponse>), AppError> {
+    let email = payload.email.trim();
+    if email.is_empty() || !email.contains('@') {
+        return Err(AppError::BadRequest("Invalid email address".to_string()));
+    }
+
+    // 1. Check if user exists
+    let user_exists = sqlx::query("SELECT id FROM users WHERE email = $1")
+        .bind(email)
+        .fetch_optional(state.pool.as_ref())
+        .await?;
+
+    if user_exists.is_none() {
+        // Return standard response to prevent user enumeration
+        return Ok((
+            StatusCode::OK,
+            Json(MessageResponse {
+                message: "If an account with that email exists, a password reset code has been sent.".to_string(),
+            }),
+        ));
+    }
+
+    // 2. Time interval rate limiting check
+    let last_reset = sqlx::query_as::<_, PasswordReset>(
+        "SELECT id, email, otp_hash, created_at, expires_at, used FROM password_resets WHERE email = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(email)
+    .fetch_optional(state.pool.as_ref())
+    .await?;
+
+    if let Some(reset) = last_reset {
+        let elapsed_secs = (chrono::Utc::now() - reset.created_at).num_seconds();
+        let interval_secs = state.config.password_reset_interval_secs;
+        if elapsed_secs < interval_secs {
+            let wait_time = interval_secs - elapsed_secs;
+            return Err(AppError::TooManyRequests(format!(
+                "Please wait {} seconds before requesting another reset code",
+                wait_time
+            )));
+        }
+    }
+
+    // 3. Generate 6-digit OTP code
+    let otp_code: u32 = rand::thread_rng().gen_range(100000..=999999);
+    let otp_str = otp_code.to_string();
+
+    // 4. Hash OTP code for storage
+    let otp_hash = hash_password(otp_str.clone(), state.config.bcrypt_cost).await?;
+    let expires_at = chrono::Utc::now() + chrono::Duration::minutes(state.config.password_reset_expiration_mins);
+
+    // 5. Store OTP record in database
+    sqlx::query(
+        "INSERT INTO password_resets (email, otp_hash, expires_at) VALUES ($1, $2, $3)",
+    )
+    .bind(email)
+    .bind(otp_hash)
+    .bind(expires_at)
+    .execute(state.pool.as_ref())
+    .await?;
+
+    // 6. Dispatch AWS SES email
+    send_password_reset_email(email, &otp_str, &state.config).await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(MessageResponse {
+            message: "If an account with that email exists, a password reset code has been sent.".to_string(),
+        }),
+    ))
+}
+
+pub async fn verify_reset_code(
+    State(state): State<AppState>,
+    Json(payload): Json<VerifyResetCodeRequest>,
+) -> Result<(StatusCode, Json<MessageResponse>), AppError> {
+    let email = payload.email.trim();
+    let code = payload.code.trim();
+
+    if email.is_empty() || code.is_empty() {
+        return Err(AppError::BadRequest("Email and code are required".to_string()));
+    }
+
+    let reset_record = sqlx::query_as::<_, PasswordReset>(
+        "SELECT id, email, otp_hash, created_at, expires_at, used FROM password_resets WHERE email = $1 AND used = FALSE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(email)
+    .fetch_optional(state.pool.as_ref())
+    .await?
+    .ok_or_else(|| AppError::BadRequest("Invalid or expired password reset code".to_string()))?;
+
+    let is_valid = verify_password(code.to_string(), reset_record.otp_hash).await?;
+    if !is_valid {
+        return Err(AppError::BadRequest("Invalid or expired password reset code".to_string()));
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(MessageResponse {
+            message: "Reset code is valid.".to_string(),
+        }),
+    ))
+}
+
+pub async fn reset_password(
+    State(state): State<AppState>,
+    Json(payload): Json<ResetPasswordRequest>,
+) -> Result<(StatusCode, Json<MessageResponse>), AppError> {
+    let email = payload.email.trim();
+    let code = payload.code.trim();
+
+    if email.is_empty() || code.is_empty() {
+        return Err(AppError::BadRequest("Email and code are required".to_string()));
+    }
+    if payload.new_password.len() < 6 || payload.new_password.len() > 100 {
+        return Err(AppError::BadRequest("Password must be between 6 and 100 characters".to_string()));
+    }
+
+    let reset_record = sqlx::query_as::<_, PasswordReset>(
+        "SELECT id, email, otp_hash, created_at, expires_at, used FROM password_resets WHERE email = $1 AND used = FALSE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(email)
+    .fetch_optional(state.pool.as_ref())
+    .await?
+    .ok_or_else(|| AppError::BadRequest("Invalid or expired password reset code".to_string()))?;
+
+    let is_valid = verify_password(code.to_string(), reset_record.otp_hash).await?;
+    if !is_valid {
+        return Err(AppError::BadRequest("Invalid or expired password reset code".to_string()));
+    }
+
+    let new_password_hash = hash_password(payload.new_password, state.config.bcrypt_cost).await?;
+
+    // Update user's password
+    sqlx::query("UPDATE users SET password = $1 WHERE email = $2")
+        .bind(new_password_hash)
+        .bind(email)
+        .execute(state.pool.as_ref())
+        .await?;
+
+    // Mark reset code as used
+    sqlx::query("UPDATE password_resets SET used = TRUE WHERE id = $1")
+        .bind(reset_record.id)
+        .execute(state.pool.as_ref())
+        .await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(MessageResponse {
+            message: "Password has been reset successfully.".to_string(),
+        }),
+    ))
 }

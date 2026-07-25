@@ -10,6 +10,10 @@ pub struct Config {
     pub server_port: u16,
     pub bcrypt_cost: u32,
     pub max_connections: u32,
+    pub aws_region: String,
+    pub aws_ses_from_email: Option<String>,
+    pub password_reset_interval_secs: i64,
+    pub password_reset_expiration_mins: i64,
 }
 
 impl Config {
@@ -52,6 +56,22 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(50);
 
+        let aws_region = env::var("AWS_REGION")
+            .or_else(|_| env::var("AWS_DEFAULT_REGION"))
+            .unwrap_or_else(|_| "us-east-1".to_string());
+
+        let aws_ses_from_email = env::var("AWS_SES_FROM_EMAIL").ok().filter(|s| !s.trim().is_empty());
+
+        let password_reset_interval_secs = env::var("PASSWORD_RESET_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60);
+
+        let password_reset_expiration_mins = env::var("PASSWORD_RESET_EXPIRATION_MINS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(15);
+
         Ok(Config {
             database_url,
             jwt_secret,
@@ -61,6 +81,10 @@ impl Config {
             server_port,
             bcrypt_cost,
             max_connections,
+            aws_region,
+            aws_ses_from_email,
+            password_reset_interval_secs,
+            password_reset_expiration_mins,
         })
     }
 }

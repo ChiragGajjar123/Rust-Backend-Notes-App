@@ -112,3 +112,31 @@ pub struct AuthResponse {
 pub struct MessageResponse {
     pub message: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PasswordReset {
+    pub id: Uuid,
+    pub email: String,
+    pub otp_hash: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub used: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ForgotPasswordRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VerifyResetCodeRequest {
+    pub email: String,
+    pub code: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResetPasswordRequest {
+    pub email: String,
+    pub code: String,
+    pub new_password: String,
+}

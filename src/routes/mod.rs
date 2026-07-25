@@ -15,6 +15,9 @@ pub fn auth_routes() -> Router<AppState> {
         .route("/auth/login", post(crate::handlers::auth::login))
         .route("/auth/signup", post(crate::handlers::auth::signup))
         .route("/auth/me", get(crate::handlers::auth::get_current_user))
+        .route("/auth/forgot-password", post(crate::handlers::auth::forgot_password))
+        .route("/auth/verify-reset-code", post(crate::handlers::auth::verify_reset_code))
+        .route("/auth/reset-password", post(crate::handlers::auth::reset_password))
 }
 
 pub fn notes_routes() -> Router<AppState> {
