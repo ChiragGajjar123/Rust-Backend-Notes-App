@@ -135,9 +135,14 @@ pub async fn forgot_password(
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             expires_at TIMESTAMPTZ NOT NULL,
             used BOOLEAN NOT NULL DEFAULT FALSE
-        );
-        CREATE INDEX IF NOT EXISTS idx_password_resets_email_created ON password_resets(email, created_at DESC);
+        )
         "#,
+    )
+    .execute(state.pool.as_ref())
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_password_resets_email_created ON password_resets(email, created_at DESC)",
     )
     .execute(state.pool.as_ref())
     .await?;
