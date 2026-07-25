@@ -203,7 +203,7 @@ pub async fn forgot_password(
     Ok((
         StatusCode::OK,
         Json(MessageResponse {
-            message: "A 6-digit password reset code has been sent to your email.".to_string(),
+            message: "A 6-digit reset code has been sent to your email. (Please check your spam/junk folder if you don't see it).".to_string(),
         }),
     ))
 }
